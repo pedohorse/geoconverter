@@ -1,0 +1,14 @@
+{
+	"comment"	: "Houdini Geometry Conversion Applications",
+	"translators" :
+	[
+		{
+			"description"	: "some custom format",
+			"extensions"	: [ ".xxx" ],
+			"opipe"		: {
+				"command"	: "geoconverter -t stl '%(save)s'",
+				"binary"	: false
+			}
+		}
+	]
+}
