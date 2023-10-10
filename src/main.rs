@@ -1,5 +1,5 @@
 use geoconverter::{
-    create_stl_solid, parse, serialize_obj, serialize_stl, HoudiniGeoSchemaParser, ReaderElement,
+    create_stl_solid, parse_ascii, parse_binary, serialize_obj, serialize_stl, HoudiniGeoSchemaParser, ReaderElement,
 };
 use std::env::args;
 use std::fs::File;
@@ -23,7 +23,7 @@ fn main() {
     }
     let mut stdin = io::stdin();
 
-    let res = parse(&mut stdin);
+    let res = parse_ascii(&mut stdin);
 
     let arg1 = argv.nth(1).expect("not enough arguments provided!");
     let (converion_type, out_file_path) = if arg1 == "-t" {
