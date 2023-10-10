@@ -1,71 +1,85 @@
+use std::io::Write;
+use std::io::stdout;
+
 use crate::geo_struct::ReaderElement;
 
 pub fn preview(elem: &ReaderElement) {
-    print_offset(elem, 0);
+    to_json(elem, &mut stdout());
 }
 
-fn print_tabs(tabs: usize) {
-    for _ in 0..tabs { print!("\t"); }
+
+pub fn to_json(elem: &ReaderElement, output: &mut dyn Write) {
+    write_offset(output, elem, 0);
 }
 
-fn print_offset(elem: &ReaderElement, tabs: usize) {
+const ERRMSG: &str = "write error!";
+
+fn write_tabs(output: &mut dyn Write, tabs: usize) {
+    for _ in 0..tabs { write!(output, "  ").expect(ERRMSG); }
+}
+
+
+fn write_offset(output: &mut dyn Write, elem: &ReaderElement, tabs: usize) {
     match elem {        
         ReaderElement::Array(x) => {
-            println!("[");
-            print_tabs(tabs + 1);
+            writeln!(output, "[").expect(ERRMSG);
+            write_tabs(output, tabs + 1);
             for elem in x {
                 match elem {
                     ReaderElement::Array(_) | ReaderElement::KeyValueObject(_) => {
-                        print_offset(elem, tabs + 1);
-                        print_tabs(tabs + 1);
+                        writeln!(output, "").expect(ERRMSG);
+                        write_tabs(output, tabs + 1);
+                        write_offset(output, elem, tabs + 1);
+                        write_tabs(output, tabs + 1);
                     }
                     _ => {
-                        print_offset(elem, 0);
-                        print!(", ")
+                        write_offset(output, elem, 0);
+                        write!(output, ", ").expect(ERRMSG);
                     }
                 }
             }
-            println!("");
-            print_tabs(tabs);
-            println!("]");
+            writeln!(output, "").expect(ERRMSG);
+            write_tabs(output, tabs);
+            write!(output, "]").expect(ERRMSG);
         }
         ReaderElement::KeyValueObject(x) => {
-            println!("{{");
+            writeln!(output, "{{").expect(ERRMSG);
             for (key, elem) in x {
-                print_tabs(tabs + 1);
+                write_tabs(output, tabs + 1);
                 match elem {
                     ReaderElement::Array(_) | ReaderElement::KeyValueObject(_) => {
-                        println!("{}:", key);
-                        print_tabs(tabs + 1);
-                        print_offset(elem, tabs + 1);
-                        print_tabs(tabs + 1);
+                        writeln!(output, "{}:", key).expect(ERRMSG);
+                        write_tabs(output, tabs + 1);
+                        write_offset(output, elem, tabs + 1);
+                        write_tabs(output, tabs + 1);
                     }
                     _ => {
-                        print!("{}: ", key);
-                        print_offset(elem, 0);
-                        println!("");
+                        write!(output, "{}: ", key).expect(ERRMSG);
+                        write_offset(output, elem, 0);
+                        write!(output, "").expect(ERRMSG);
                     }
                 }
-                
-                println!("");
+                writeln!(output, "").expect(ERRMSG);
+                write_tabs(output, tabs);
+                writeln!(output, "").expect(ERRMSG);
             }
-            print_tabs(tabs);
-            println!("}}");
+            write_tabs(output, tabs);
+            write!(output, "}}").expect(ERRMSG);
         }
         ReaderElement::Bool(x) => {
-            print!("{}", x);
+            write!(output, "{}", x).expect(ERRMSG);
         }
         ReaderElement::Int(x) => {
-            print!("{}", x);
+            write!(output, "{}", x).expect(ERRMSG);
         }
         ReaderElement::Float(x) => {
-            print!("{}", x);
+            write!(output, "{}", x).expect(ERRMSG);
         }
         ReaderElement::None => {
-            print!("None");
+            write!(output, "None").expect(ERRMSG);
         }
         ReaderElement::Text(x) => {
-            print!("{}", x);
+            write!(output, "\"{}\"", x).expect(ERRMSG);
         }
     };
 }

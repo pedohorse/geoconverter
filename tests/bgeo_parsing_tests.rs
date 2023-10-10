@@ -1,12 +1,22 @@
 use geoconverter::{self, ReaderElement};
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 
 #[test]
 fn parse_bgeo_box() {
-    let mut f = File::open("./tests/box.bgeo").expect("failed to open test file");
-    let elem = geoconverter::parse_binary(&mut BufReader::new(&mut f));
+    parse_box_helper("./tests/box.bgeo", &geoconverter::parse_binary);
+}
+
+#[test]
+fn parse_geo_box() {
+    parse_box_helper("./tests/box.geo", &geoconverter::parse_ascii);
+}
+
+fn parse_box_helper(filepath: &str, parser: & dyn Fn(&mut dyn Read) -> ReaderElement) {
+    let mut f = File::open(filepath).expect("failed to open test file");
+    //let mut f = File::open("/tmp/filea.bgeo").expect("failed to open test file");
+    let elem = parser(&mut BufReader::new(&mut f));
 
     geoconverter::preview(&elem);
 
