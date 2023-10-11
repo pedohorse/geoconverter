@@ -40,6 +40,16 @@ impl<'a> BuffChannel<'a> {
         }
     }
 
+    pub fn populate_with(&mut self, data: &[u8]) {
+        if self.i > self.start {
+            panic!("cannot prepopulate when already reading from it");
+        }
+        if self.buff.len() < self.start + data.len() {
+            self.buff.resize(self.start + data.len(), 0);
+        }
+        self.buff[self.start..self.start + data.len()].copy_from_slice(data);
+    }
+
     fn buffer_moar(&mut self) -> Option<()> {
         let chunk = self.chunk_size;
         let old_size = self.buff.len();
@@ -53,7 +63,8 @@ impl<'a> BuffChannel<'a> {
 
         let mut offset = 0;
         for i in old_size..self.buff.len() {
-            if self.buff[i].is_ascii_whitespace() {  // TODO: i'm an idiot - this eats spaces from string constants
+            if self.buff[i].is_ascii_whitespace() {
+                // TODO: i'm an idiot - this eats spaces from string constants
                 offset += 1;
                 continue;
             }
@@ -112,11 +123,13 @@ impl<'a> BuffChannel<'a> {
     pub fn peek_skip_whitespaces(&mut self) -> Option<u8> {
         loop {
             match self.peek() {
-                Some(x) if x.is_ascii_whitespace() => { self.consume(); }
-                Some(x) => { return Some(x) }
-                None => { return None }
+                Some(x) if x.is_ascii_whitespace() => {
+                    self.consume();
+                }
+                Some(x) => return Some(x),
+                None => return None,
             };
-        };
+        }
     }
 
     pub fn get_skip_whitespaces(&mut self) -> Option<u8> {
@@ -124,7 +137,6 @@ impl<'a> BuffChannel<'a> {
         self.i += 1;
         x
     }
-
 }
 
 fn parse_one_element(chan: &mut BuffChannel) -> ReaderElement {
@@ -306,6 +318,16 @@ fn parse_one_element(chan: &mut BuffChannel) -> ReaderElement {
     return value;
 }
 
+pub fn parse_ascii_first_byte_separately(
+    first_byte: u8,
+    input: &mut dyn std::io::Read,
+) -> ReaderElement {
+    // TODO: we already buffer from outside, rework this
+    let mut chan = BuffChannel::new(input, 1024 * 128, 0);
+    let buff = [first_byte; 1];
+    chan.populate_with(&buff);
+    return parse_one_element(&mut chan);
+}
 
 pub fn parse_ascii(input: &mut dyn std::io::Read) -> ReaderElement {
     //let mut buf = String::new();

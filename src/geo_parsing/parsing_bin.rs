@@ -29,7 +29,7 @@ const JID_TOKENUNDEF: u8 = 0x2d;
 const JID_UNIFORM_ARRAY: u8 = 0x40;
 const JID_KEY_SEPARATOR: u8 = 0x3a;
 const JID_VALUE_SEPARATOR: u8 = 0x2c;
-const JID_MAGIC: u8 = 0x7f;
+pub const JID_MAGIC: u8 = 0x7f;
 
 const BINARY_MAGIC: [u8; 4] = [0x62, 0x4a, 0x53, 0x4e];
 const BINARY_MAGIC_SWAP: [u8; 4] = [0x4e, 0x53, 0x4a, 0x62];
@@ -389,10 +389,8 @@ impl<'a> BgeoParser<'a> {
 }
 
 
-pub fn parse_binary(input: &mut dyn std::io::Read) -> ReaderElement {
+pub fn parse_binary_first_byte_separately(first_byte: u8, input: &mut dyn std::io::Read) -> ReaderElement {
     let mut buf = [0_u8; 4];
-    input.read_exact(&mut buf[..1]).expect("failed to read magic");
-
     input.read_exact(&mut buf[..4]).expect("failed to endian magic");
 
     let mut parser = match buf {
@@ -404,4 +402,16 @@ pub fn parse_binary(input: &mut dyn std::io::Read) -> ReaderElement {
         ReaderElementOption::Some(x) => x,
         _ => panic!("failed to parse file")
     };
+}
+
+
+pub fn parse_binary(input: &mut dyn std::io::Read) -> ReaderElement {
+    let mut buf = [0_u8; 1];
+    input.read_exact(&mut buf[..1]).expect("failed to read magic");
+
+    if buf[0] != JID_MAGIC {
+        panic!("bad magic header!");
+    }
+
+    return parse_binary_first_byte_separately(buf[0], input);
 }

@@ -1,5 +1,5 @@
 use geoconverter::{
-    create_stl_solid, parse_ascii, parse_binary, serialize_obj, serialize_stl, HoudiniGeoSchemaParser, ReaderElement,
+    create_stl_solid, parse, serialize_obj, serialize_stl, HoudiniGeoSchemaParser, ReaderElement,
 };
 use std::env::args;
 use std::fs::File;
@@ -8,6 +8,7 @@ use std::io::{self, Write};
 enum ConvertionType {
     Obj,
     Stl,
+    Geo,
 }
 
 fn main() {
@@ -23,7 +24,7 @@ fn main() {
     }
     let mut stdin = io::stdin();
 
-    let res = parse_ascii(&mut stdin);
+    let res = parse(&mut stdin);
 
     let arg1 = argv.nth(1).expect("not enough arguments provided!");
     let (converion_type, out_file_path) = if arg1 == "-t" {
@@ -35,6 +36,7 @@ fn main() {
         match arg2.as_deref() {
             Some("obj") => (ConvertionType::Obj, file_path),
             Some("stl") => (ConvertionType::Stl, file_path),
+            Some("geo") | Some("json") => (ConvertionType::Geo, file_path),
             Some(s) => {
                 println!("wtf is type {}?", s);
                 std::process::exit(1);
@@ -51,6 +53,7 @@ fn main() {
     match converion_type {
         ConvertionType::Obj => convert_to_obj(&res, &out_file_path),
         ConvertionType::Stl => convert_to_stl(&res, &out_file_path),
+        ConvertionType::Geo => convert_to_geo(&res, &out_file_path),
     }
 }
 
@@ -68,5 +71,13 @@ fn convert_to_obj(res: &ReaderElement, path: &str) {
     let mut file = io::BufWriter::new(File::create(path).expect("could not create output file"));
 
     serialize_obj(&mut schema_parser, &mut file);
+    file.flush().expect("failed to flush the file");
+}
+
+fn convert_to_geo(res: &ReaderElement, path: &str) {
+    let mut file = io::BufWriter::new(File::create(path).expect("could not create output file"));
+
+    geoconverter::geo_struct_serializer::to_json(res, &mut file);
+
     file.flush().expect("failed to flush the file");
 }

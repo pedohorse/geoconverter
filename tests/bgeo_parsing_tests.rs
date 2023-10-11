@@ -13,12 +13,22 @@ fn parse_geo_box() {
     parse_box_helper("./tests/box.geo", &geoconverter::parse_ascii);
 }
 
+#[test]
+fn parse_bgeo_box_autodetect() {
+    parse_box_helper("./tests/box.bgeo", &geoconverter::parse);
+}
+
+#[test]
+fn parse_geo_box_autodetect() {
+    parse_box_helper("./tests/box.geo", &geoconverter::parse);
+}
+
 fn parse_box_helper(filepath: &str, parser: & dyn Fn(&mut dyn Read) -> ReaderElement) {
     let mut f = File::open(filepath).expect("failed to open test file");
     //let mut f = File::open("/tmp/filea.bgeo").expect("failed to open test file");
     let elem = parser(&mut BufReader::new(&mut f));
 
-    geoconverter::preview(&elem);
+    geoconverter::geo_struct_serializer::preview(&elem);
 
     if let ReaderElement::Array(root_arr) = &elem {
         if let ReaderElement::Text(x) = &root_arr[0] {
