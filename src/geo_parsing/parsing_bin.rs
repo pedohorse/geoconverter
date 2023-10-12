@@ -353,6 +353,29 @@ impl<'a> BgeoParser<'a> {
                             .iter()
                             .map(|x| -> ReaderElement { ReaderElement::Float(*x as f64) }).collect()
                     }
+                    JID_BOOL => {
+                        // packed blocks of 32 bits
+                        let mut remaining_len = array_len;
+                        let mut buff = [0_u8; 4];
+                        let mut vec = Vec::with_capacity(array_len);
+                        while remaining_len > 0 {
+                            let nbits = 32.min(remaining_len);
+
+                            self.chan.read_exact(&mut buff).expect("failed to read buffer");
+                            let sample = (self.u32_from_bytes)(buff.try_into().expect("failed to convert bits"));
+                            for i in 0..nbits {
+                                vec.push(ReaderElement::Bool(sample & (1 << i) != 0));
+                            }
+                            remaining_len -= nbits;
+                        }
+                        vec
+                    }
+                    JID_TOKENREF => {
+                        panic!("not yet implemented!");
+                    }
+                    JID_STRING => {
+                        panic!("not yet implemented!");
+                    }
                     _ => panic!("unknown unified array type {}", array_type)
                 });
                 // we convert uniform array into simple array... is it good enough? 
