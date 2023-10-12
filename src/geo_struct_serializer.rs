@@ -1,12 +1,11 @@
-use std::io::Write;
 use std::io::stdout;
+use std::io::Write;
 
 use crate::geo_struct::ReaderElement;
 
 pub fn preview(elem: &ReaderElement) {
     to_json(elem, &mut stdout());
 }
-
 
 pub fn to_json(elem: &ReaderElement, output: &mut dyn Write) {
     write_element(output, elem, 0);
@@ -15,17 +14,19 @@ pub fn to_json(elem: &ReaderElement, output: &mut dyn Write) {
 const ERRMSG: &str = "write error!";
 
 fn write_tabs(output: &mut dyn Write, tabs: usize) {
-    for _ in 0..tabs { write!(output, "  ").expect(ERRMSG); }
+    for _ in 0..tabs {
+        write!(output, "  ").expect(ERRMSG);
+    }
 }
 
 enum WroteWhat {
     Init,
     WroteInline,
-    WroteBlock
+    WroteBlock,
 }
 
 fn write_element(output: &mut dyn Write, elem: &ReaderElement, tabs: usize) {
-    match elem {        
+    match elem {
         ReaderElement::Array(x) if x.len() == 0 => {
             write!(output, "[]").expect(ERRMSG);
         }
@@ -34,6 +35,7 @@ fn write_element(output: &mut dyn Write, elem: &ReaderElement, tabs: usize) {
             write_tabs(output, tabs + 1);
             let arr_last_i = x.len() - 1;
             let mut last_wrote_what = WroteWhat::Init;
+            let mut wrote_in_line = 0;
             for (i, elem) in x.iter().enumerate() {
                 match elem {
                     ReaderElement::Array(_) | ReaderElement::KeyValueObject(_) => {
@@ -47,9 +49,15 @@ fn write_element(output: &mut dyn Write, elem: &ReaderElement, tabs: usize) {
                         }
                         write_tabs(output, tabs + 1);
                         last_wrote_what = WroteWhat::WroteBlock;
+                        wrote_in_line = 0;
                     }
                     _ => {
                         if let WroteWhat::WroteBlock = last_wrote_what {
+                            writeln!(output, "").expect(ERRMSG);
+                            write_tabs(output, tabs + 1);
+                        }
+                        if wrote_in_line >= 20 {
+                            wrote_in_line = 0;
                             writeln!(output, "").expect(ERRMSG);
                             write_tabs(output, tabs + 1);
                         }
@@ -57,6 +65,8 @@ fn write_element(output: &mut dyn Write, elem: &ReaderElement, tabs: usize) {
                         if i != arr_last_i {
                             write!(output, ", ").expect(ERRMSG);
                         }
+                        wrote_in_line += 1;
+
                         last_wrote_what = WroteWhat::WroteInline;
                     }
                 }
