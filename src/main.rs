@@ -22,7 +22,7 @@ fn main() {
         );
         std::process::exit(2)
     }
-    let mut stdin = io::stdin();
+    let mut stdin = io::stdin().lock();
 
     let res = parse(&mut stdin);
 
