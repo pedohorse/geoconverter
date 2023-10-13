@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::geo_struct::ReaderElement;
+use crate::geo_struct::{ReaderElement, UniformArrayType};
 
 pub struct HoudiniGeoSchemaParser<'a> {
     structure: &'a ReaderElement,
@@ -14,7 +14,7 @@ pub struct HoudiniGeoSchemaParser<'a> {
     _polygons: Option<Vec<GeoPolygon>>,
     _prim_count: usize,
     _point_count: usize,
-    _vertex_count: usize
+    _vertex_count: usize,
 }
 
 pub struct TupleGeoAttribute<T: Copy> {
@@ -63,6 +63,11 @@ pub struct GeoPolygon {
 }
 
 fn get_from_kv_array<'a>(arr_elem: &'a ReaderElement, key: &str) -> Option<&'a ReaderElement> {
+    // TODO: not optimal, better refactor with macros
+    get_from_any_kv_array(arr_elem, &[key])
+}
+
+fn get_from_any_kv_array<'a>(arr_elem: &'a ReaderElement, keys: &[&str]) -> Option<&'a ReaderElement> {
     let mut is_key = false;
     let mut next_one_is_the_shit = false;
     let arr = if let ReaderElement::Array(x) = arr_elem {
@@ -80,7 +85,8 @@ fn get_from_kv_array<'a>(arr_elem: &'a ReaderElement, key: &str) -> Option<&'a R
             continue;
         };
         if let ReaderElement::Text(arr_key) = elem {
-            if arr_key == key {
+            if let Some(_) = keys.iter().find(|&&x| x == arr_key) {
+                // arr_key == key
                 next_one_is_the_shit = true;
             }
         } else {
@@ -91,19 +97,39 @@ fn get_from_kv_array<'a>(arr_elem: &'a ReaderElement, key: &str) -> Option<&'a R
 }
 
 impl<'a> HoudiniGeoSchemaParser<'a> {
+    //fn uniform_array_index_parser(uniarr<)
+
     pub fn new(read_structure: &'a ReaderElement) -> HoudiniGeoSchemaParser<'a> {
         let indices = if let Some(topo) = get_from_kv_array(read_structure, "topology") {
             if let Some(pointref) = get_from_kv_array(topo, "pointref") {
-                if let Some(ReaderElement::Array(idxs)) = get_from_kv_array(pointref, "indices") {
-                    Vec::from_iter(idxs.iter().map(|x| -> usize {
+                match get_from_kv_array(pointref, "indices") {
+                    Some(ReaderElement::Array(idxs)) => Vec::from_iter(idxs.iter().map(|x| -> usize {
                         if let ReaderElement::Int(u) = x {
                             *u as usize
                         } else {
                             panic!("bad schema! index no int!");
                         }
-                    }))
-                } else {
-                    Vec::new()
+                    })),
+                    Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi8(vec))) => {
+                        vec.iter().map(|x| -> usize { *x as usize }).collect()
+                    }
+                    Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi16(vec))) => {
+                        vec.iter().map(|x| -> usize { *x as usize }).collect()
+                    }
+                    Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi32(vec))) => {
+                        vec.iter().map(|x| -> usize { *x as usize }).collect()
+                    }
+                    Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi64(vec))) => {
+                        vec.iter().map(|x| -> usize { *x as usize }).collect()
+                    }
+                    Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTu8(vec))) => {
+                        vec.iter().map(|x| -> usize { *x as usize }).collect()
+                    }
+                    Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTu16(vec))) => {
+                        vec.iter().map(|x| -> usize { *x as usize }).collect()
+                    }
+                    Some(_) => panic!("bad schema! index no int!"), // TODO impl uniform arr
+                    None => Vec::new(),
                 }
             } else {
                 Vec::new()
@@ -179,8 +205,7 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
         } else if let Some(ReaderElement::Array(arrays)) = get_from_kv_array(values, "arrays") {
             // so it's key arrays
             // for now i know only of case of size=1, no idea when it can be not 1 and what would that mean
-            let values_size = if let Some(ReaderElement::Int(x)) = get_from_kv_array(values, "size")
-            {
+            let values_size = if let Some(ReaderElement::Int(x)) = get_from_kv_array(values, "size") {
                 *x
             } else {
                 panic!("bad schema! no size in values");
@@ -203,18 +228,15 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
     }
 
     pub fn parse_point_attributes(&mut self) {
-        self._point_attributes =
-            Self::parse_attributes(self.structure, "pointattributes", "pointcount");
+        self._point_attributes = Self::parse_attributes(self.structure, "pointattributes", "pointcount");
     }
 
     pub fn parse_vertex_attributes(&mut self) {
-        self._vertex_attributes =
-            Self::parse_attributes(self.structure, "vertexattributes", "vertexcount");
+        self._vertex_attributes = Self::parse_attributes(self.structure, "vertexattributes", "vertexcount");
     }
 
     pub fn parse_primitive_attributes(&mut self) {
-        self._prim_attributes =
-            Self::parse_attributes(self.structure, "primitiveattributes", "primitivecount");
+        self._prim_attributes = Self::parse_attributes(self.structure, "primitiveattributes", "primitivecount");
     }
 
     fn parse_attributes(
@@ -224,25 +246,23 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
     ) -> Option<HashMap<&'a str, GeoAttributeKind>> {
         let mut attribute_map = HashMap::new();
 
-        let elem_count: usize =
-            if let Some(ReaderElement::Int(x)) = get_from_kv_array(structure, elem_count_key) {
-                (*x).try_into().expect("incorrect element count")
-            } else {
-                panic!("could not find key {}", elem_count_key);
-            };
+        let elem_count: usize = if let Some(ReaderElement::Int(x)) = get_from_kv_array(structure, elem_count_key) {
+            (*x).try_into().expect("incorrect element count")
+        } else {
+            panic!("could not find key {}", elem_count_key);
+        };
 
         let attributes = if let Some(x) = get_from_kv_array(structure, "attributes") {
             x
         } else {
             panic!("bad schema! attributes must be an array");
         };
-        let elem_attributes =
-            if let Some(ReaderElement::Array(x)) = get_from_kv_array(attributes, attrib_key) {
-                x
-            } else {
-                println!("no {} attributes!", attrib_key);
-                return Some(HashMap::new());
-            };
+        let elem_attributes = if let Some(ReaderElement::Array(x)) = get_from_kv_array(attributes, attrib_key) {
+            x
+        } else {
+            println!("no {} attributes!", attrib_key);
+            return Some(HashMap::new());
+        };
 
         for elem_attribute_block_el in elem_attributes {
             let elem_attribute_block = if let ReaderElement::Array(x) = elem_attribute_block_el {
@@ -255,16 +275,12 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                 println!("bad schema! unrecognized point attribute block type, skipping");
                 continue;
             }
-            let attrib_name = if let Some(ReaderElement::Text(x)) =
-                get_from_kv_array(&elem_attribute_block[0], "name")
-            {
+            let attrib_name = if let Some(ReaderElement::Text(x)) = get_from_kv_array(&elem_attribute_block[0], "name") {
                 x
             } else {
                 panic!("bad schema! no attrib name");
             };
-            let attrib_type = if let Some(ReaderElement::Text(x)) =
-                get_from_kv_array(&elem_attribute_block[0], "type")
-            {
+            let attrib_type = if let Some(ReaderElement::Text(x)) = get_from_kv_array(&elem_attribute_block[0], "type") {
                 x
             } else {
                 panic!("bad schema! no attrib type");
@@ -285,16 +301,12 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                 attrib_name.as_str(),
                 match attrib_type.as_str() {
                     "numeric" => {
-                        let size: usize = if let Some(ReaderElement::Int(x)) =
-                            get_from_kv_array(values, "size")
-                        {
+                        let size: usize = if let Some(ReaderElement::Int(x)) = get_from_kv_array(values, "size") {
                             *x as usize
                         } else {
                             panic!("bad schema! no size for values!");
                         };
-                        let storage = if let Some(ReaderElement::Text(x)) =
-                            get_from_kv_array(values, "storage")
-                        {
+                        let storage = if let Some(ReaderElement::Text(x)) = get_from_kv_array(values, "storage") {
                             x
                         } else {
                             panic!("bad schema! no storage for values!");
@@ -339,13 +351,12 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                         }
                     }
                     "string" => {
-                        let strings = if let Some(ReaderElement::Array(x)) =
-                            get_from_kv_array(&elem_attribute_block[1], "strings")
-                        {
-                            x
-                        } else {
-                            panic!("bad schema! no stirngs for string attrib!")
-                        };
+                        let strings =
+                            if let Some(ReaderElement::Array(x)) = get_from_kv_array(&elem_attribute_block[1], "strings") {
+                                x
+                            } else {
+                                panic!("bad schema! no stirngs for string attrib!")
+                            };
                         GeoAttributeKind::String(TokenGeoAttribute {
                             tokens: Vec::from_iter(strings.iter().map(|x| -> String {
                                 if let ReaderElement::Text(s) = x {
@@ -359,10 +370,7 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                                 1,
                                 &|x| -> usize {
                                     if let ReaderElement::Int(f) = x {
-                                        (*f).try_into().expect(&format!(
-                                            "failed to convert int to usize {}",
-                                            *f
-                                        ))
+                                        (*f).try_into().expect(&format!("failed to convert int to usize {}", *f))
                                     } else {
                                         panic!("bad schema! {:?}", x);
                                     }
@@ -383,12 +391,9 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
     }
 
     pub fn parse_primitives(&mut self) {
-
         let mut polygons = Vec::with_capacity(self._prim_count);
         let mut cur_prim_num: usize = 0;
-        let prim_blocks = if let Some(ReaderElement::Array(x)) =
-            get_from_kv_array(self.structure, "primitives")
-        {
+        let prim_blocks = if let Some(ReaderElement::Array(x)) = get_from_kv_array(self.structure, "primitives") {
             x
         } else {
             panic!("bad schema! no primitives entry")
@@ -405,25 +410,21 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                 continue;
             }
 
-            let block_type = get_from_kv_array(&prim_block_arr[0], "type")
-                .expect("bad schema! no prim block type!");
+            let block_type = get_from_kv_array(&prim_block_arr[0], "type").expect("bad schema! no prim block type!");
             if let ReaderElement::Text(type_text) = block_type {
-                if type_text != "Polygon_run" {
+                // skip unknown for now types of blocks
+                if type_text != "Polygon_run" && type_text != "p_r" {
                     println!("skipping block {}", type_text);
                     if type_text.ends_with("_run") {
                         let nprims_in_block = if let Some(ReaderElement::Int(x)) =
-                            get_from_kv_array(&prim_block_arr[1], "nprimitives")
+                            get_from_any_kv_array(&prim_block_arr[1], &["nprimitives", "n_p"])
                         {
                             *x
                         } else {
-                            panic!(
-                                "bad schema! {} block is expected to have nprimitives key",
-                                type_text
-                            );
+                            panic!("bad schema! {} block is expected to have nprimitives/n_p key", type_text);
                         };
-                        cur_prim_num += <i64 as TryInto<usize>>::try_into(nprims_in_block).expect(
-                            &format!("bad data. nprimitives negative?? {}", nprims_in_block),
-                        );
+                        cur_prim_num += <i64 as TryInto<usize>>::try_into(nprims_in_block)
+                            .expect(&format!("bad data. nprimitives negative?? {}", nprims_in_block));
                     } else {
                         cur_prim_num += 1;
                     }
@@ -433,13 +434,12 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                 panic!("bad schemd! primitive type is not a string");
             }
 
-            let start_vertex = if let Some(ReaderElement::Int(x)) =
-                get_from_kv_array(&prim_block_arr[1], "startvertex")
-            {
-                *x
-            } else {
-                panic!("unexpected type!")
-            } as usize;
+            let start_vertex =
+                if let Some(ReaderElement::Int(x)) = get_from_any_kv_array(&prim_block_arr[1], &["startvertex", "s_v"]) {
+                    *x
+                } else {
+                    panic!("unexpected type!")
+                } as usize;
             // let num_prims = if let Some(ReaderElement::Int(x)) =
             //     get_from_kv_array(&prim_block_arr[1], "nprimitives")
             // {
@@ -447,79 +447,140 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
             // } else {
             //     panic!("unexpected type!")
             // };
+
             // it's either nvertices_rle or nvertices
+
             // nvertices_rle case
-            if let Some(ReaderElement::Array(vtx_cnt_pairs)) =
-                get_from_kv_array(&prim_block_arr[1], "nvertices_rle")
-            {
-                // TODO: check len is even
-                let mut vtx_cnts = vtx_cnt_pairs.iter();
-                let mut cur_vtx = start_vertex;
-                loop {
-                    let vtx_cnt = if let Some(x) = vtx_cnts.next() {
+            macro_rules! _loop_iter_helper {
+                ($vtx_cnt_pairs:ident, $vtx_elem_func:expr) => {
+                    let mut vtx_cnts = $vtx_cnt_pairs.iter();
+                    let mut cur_vtx = start_vertex;
+                    loop {
+                        let vtx_cnt = if let Some(x) = vtx_cnts.next() {
+                            $vtx_elem_func(x)
+                        } else {
+                            break;
+                        };
+                        let count = if let Some(x) = vtx_cnts.next() {
+                            $vtx_elem_func(x)
+                        } else {
+                            panic!("bad schema! rle no even")
+                        };
+
+                        for _ in 0..count {
+                            let mut prim_vtxs = Vec::with_capacity(vtx_cnt);
+                            for vtx_shift in 0..vtx_cnt {
+                                let vtx_num = cur_vtx + vtx_shift;
+                                prim_vtxs.push(GeoVertex {
+                                    ptnum: self.vtx_to_ptnum(vtx_num),
+                                    vtxnum: vtx_num,
+                                });
+                            }
+                            cur_vtx += vtx_cnt;
+                            polygons.push(GeoPolygon {
+                                number: cur_prim_num,
+                                vertices: prim_vtxs,
+                            });
+                            cur_prim_num += 1;
+                        }
+                    }
+                };
+            }
+
+            match get_from_any_kv_array(&prim_block_arr[1], &["nvertices_rle", "r_v"]) {
+                Some(ReaderElement::Array(vtx_cnt_pairs)) => {
+                    // TODO: check len is even
+                    _loop_iter_helper!(vtx_cnt_pairs, |x: &ReaderElement| {
                         if let ReaderElement::Int(u) = x {
                             *u as usize
                         } else {
                             panic!("bad schema! rel no int");
                         }
-                    } else {
-                        break;
-                    };
-                    let count = if let Some(ReaderElement::Int(u)) = vtx_cnts.next() {
-                        *u as usize
-                    } else {
-                        panic!("bad schema! rle no even")
-                    };
+                    });
+                }
+                Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTu8(vtx_cnt_pairs))) => {
+                    _loop_iter_helper!(vtx_cnt_pairs, |x: &u8| { *x as usize });
+                }
+                Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTu16(vtx_cnt_pairs))) => {
+                    _loop_iter_helper!(vtx_cnt_pairs, |x: &u16| { *x as usize });
+                }
+                Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi8(vtx_cnt_pairs))) => {
+                    _loop_iter_helper!(vtx_cnt_pairs, |x: &i8| { *x as usize });
+                }
+                Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi16(vtx_cnt_pairs))) => {
+                    _loop_iter_helper!(vtx_cnt_pairs, |x: &i16| { *x as usize });
+                }
+                Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi32(vtx_cnt_pairs))) => {
+                    _loop_iter_helper!(vtx_cnt_pairs, |x: &i32| { *x as usize });
+                }
+                Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi64(vtx_cnt_pairs))) => {
+                    _loop_iter_helper!(vtx_cnt_pairs, |x: &i64| { *x as usize });
+                }
+                None => {
+                    // nvertices case
+                    macro_rules! _loop_iter_helper2 {
+                        ($vtx_cnts:ident, $vtx_cnt_func:expr) => {
+                            let mut cur_vtx = start_vertex;
+                            for vtx_cnt in $vtx_cnts {
+                                let vtx_cnt = $vtx_cnt_func(vtx_cnt);
 
-                    for _ in 0..count {
-                        let mut prim_vtxs = Vec::with_capacity(vtx_cnt);
-                        for vtx_shift in 0..vtx_cnt {
-                            let vtx_num = cur_vtx + vtx_shift;
-                            prim_vtxs.push(GeoVertex {
-                                ptnum: self.vtx_to_ptnum(vtx_num),
-                                vtxnum: vtx_num,
+                                let mut prim_vtxs = Vec::with_capacity(vtx_cnt);
+                                for vtx_shift in 0..vtx_cnt {
+                                    let vtx_num = cur_vtx + vtx_shift;
+                                    prim_vtxs.push(GeoVertex {
+                                        ptnum: self.vtx_to_ptnum(vtx_num),
+                                        vtxnum: vtx_num,
+                                    });
+                                }
+                                cur_vtx += vtx_cnt;
+                                polygons.push(GeoPolygon {
+                                    number: cur_prim_num,
+                                    vertices: prim_vtxs,
+                                });
+                                cur_prim_num += 1;
+                            }
+                        };
+                    }
+
+                    match get_from_any_kv_array(&prim_block_arr[1], &["nvertices", "n_v"]) {
+                        Some(ReaderElement::Array(vtx_cnts)) => {
+                            _loop_iter_helper2!(vtx_cnts, |v: &ReaderElement| {
+                                if let ReaderElement::Int(u) = v {
+                                    *u as usize
+                                } else {
+                                    panic!("schema error! vtx cnt no int");
+                                }
                             });
                         }
-                        cur_vtx += vtx_cnt;
-                        polygons.push(GeoPolygon {
-                            number: cur_prim_num,
-                            vertices: prim_vtxs,
-                        });
-                        cur_prim_num += 1;
+                        Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTu8(vtx_cnts))) => {
+                            _loop_iter_helper2!(vtx_cnts, |v: &u8| { *v as usize });
+                        }
+                        Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTu16(vtx_cnts))) => {
+                            _loop_iter_helper2!(vtx_cnts, |v: &u16| { *v as usize });
+                        }
+                        Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi8(vtx_cnts))) => {
+                            _loop_iter_helper2!(vtx_cnts, |v: &i8| { *v as usize });
+                        }
+                        Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi16(vtx_cnts))) => {
+                            _loop_iter_helper2!(vtx_cnts, |v: &i16| { *v as usize });
+                        }
+                        Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi32(vtx_cnts))) => {
+                            _loop_iter_helper2!(vtx_cnts, |v: &i32| { *v as usize });
+                        }
+                        Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi64(vtx_cnts))) => {
+                            _loop_iter_helper2!(vtx_cnts, |v: &i64| { *v as usize });
+                        }
+                        _ => {
+                            panic!("unexpected type of nvertices/n_v block!");
+                        }
                     }
                 }
-            } else
-            // nvertices case
-            if let Some(ReaderElement::Array(vtx_cnts)) =
-                get_from_kv_array(&prim_block_arr[1], "nvertices")
-            {
-                let mut cur_vtx = start_vertex;
-                for vtx_cnt in vtx_cnts {
-                    let vtx_cnt = if let ReaderElement::Int(u) = vtx_cnt {
-                        *u as usize
-                    } else {
-                        panic!("schema error! vtx cnt no int");
-                    };
-
-                    let mut prim_vtxs = Vec::with_capacity(vtx_cnt);
-                    for vtx_shift in 0..vtx_cnt {
-                        let vtx_num = cur_vtx + vtx_shift;
-                        prim_vtxs.push(GeoVertex {
-                            ptnum: self.vtx_to_ptnum(vtx_num),
-                            vtxnum: vtx_num,
-                        });
-                    }
-                    cur_vtx += vtx_cnt;
-                    polygons.push(GeoPolygon {
-                        number: cur_prim_num,
-                        vertices: prim_vtxs,
-                    });
-                    cur_prim_num += 1;
+                _ => {
+                    panic!("unexpected type of nvertices_rle/r_v block!");
                 }
-            } else {
-                panic!("unexpected type!")
-            };
+            }
         }
+        println!("pp {}", cur_prim_num);
 
         self._polygons = Some(polygons);
     }

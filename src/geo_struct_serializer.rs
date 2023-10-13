@@ -1,7 +1,7 @@
 use std::io::stdout;
 use std::io::Write;
 
-use crate::geo_struct::ReaderElement;
+use crate::geo_struct::{ReaderElement, UniformArrayType};
 
 pub fn preview(elem: &ReaderElement) {
     to_json(elem, &mut stdout());
@@ -23,6 +23,15 @@ enum WroteWhat {
     Init,
     WroteInline,
     WroteBlock,
+}
+
+macro_rules! uniform_array_loop_print {
+    ($output:ident, $vec:ident) => {
+        write!($output, "{}", $vec[0]).expect(ERRMSG);
+        for el in &$vec[1..] {
+            write!($output, ", {}", el).expect(ERRMSG);
+        }
+    };
 }
 
 fn write_element(output: &mut dyn Write, elem: &ReaderElement, tabs: usize) {
@@ -73,6 +82,50 @@ fn write_element(output: &mut dyn Write, elem: &ReaderElement, tabs: usize) {
             }
             writeln!(output, "").expect(ERRMSG);
             write_tabs(output, tabs);
+            write!(output, "]").expect(ERRMSG);
+        }
+        ReaderElement::UniformArray(uniarr) => {
+            write!(output, "[").expect(ERRMSG);
+            match uniarr {
+                // TODO: can this be done with a macro?
+                UniformArrayType::UniformArrayTbool(vec) if vec.len() > 0 => {
+                    uniform_array_loop_print!(output, vec);
+                }
+                UniformArrayType::UniformArrayTu8(vec) if vec.len() > 0 => {
+                    uniform_array_loop_print!(output, vec);
+                }
+                UniformArrayType::UniformArrayTu16(vec) if vec.len() > 0 => {
+                    uniform_array_loop_print!(output, vec);
+                }
+                // UniformArrayType::UniformArrayTu32(vec) if vec.len() > 0 => {
+                //     uniform_array_loop_print!(output, vec);
+                // }
+                // UniformArrayType::UniformArrayTu64(vec) if vec.len() > 0 => {
+                //     uniform_array_loop_print!(output, vec);
+                // }
+                UniformArrayType::UniformArrayTi8(vec) if vec.len() > 0 => {
+                    uniform_array_loop_print!(output, vec);
+                }
+                UniformArrayType::UniformArrayTi16(vec) if vec.len() > 0 => {
+                    uniform_array_loop_print!(output, vec);
+                }
+                UniformArrayType::UniformArrayTi32(vec) if vec.len() > 0 => {
+                    uniform_array_loop_print!(output, vec);
+                }
+                UniformArrayType::UniformArrayTi64(vec) if vec.len() > 0 => {
+                    uniform_array_loop_print!(output, vec);
+                }
+                UniformArrayType::UniformArrayTf16(vec) if vec.len() > 0 => {
+                    uniform_array_loop_print!(output, vec);
+                }
+                UniformArrayType::UniformArrayTf32(vec) if vec.len() > 0 => {
+                    uniform_array_loop_print!(output, vec);
+                }
+                UniformArrayType::UniformArrayTf64(vec) if vec.len() > 0 => {
+                    uniform_array_loop_print!(output, vec);
+                }
+                &_ => { panic!("wtf is this?"); }
+            };
             write!(output, "]").expect(ERRMSG);
         }
         ReaderElement::KeyValueObject(x) if x.len() == 0 => {

@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use crate::geo_struct::ReaderElement;
+use crate::geo_struct::{ReaderElement, UniformArrayType};
 use crate::f16_half::{half_from_be_bytes, half_from_le_bytes};
 use std::collections::HashMap;
 
@@ -307,51 +307,33 @@ impl<'a> BgeoParser<'a> {
                 self.chan.read_exact(&mut buff[..1]).expect("unexpected end of buffer while reading key uniform array type");
                 let array_type = buff[0];
                 let array_len = self.parse_read_length();
-                let vec_el: ReaderElement = ReaderElement::Array(match array_type {
+                let vec_el: ReaderElement = ReaderElement::UniformArray(match array_type {
                     JID_INT8 => {
-                        self.parse_uniform_array(array_len, &Self::parse_i8)
-                            .iter()
-                            .map(|x| -> ReaderElement { ReaderElement::Int(*x as i64) }).collect()
+                        UniformArrayType::UniformArrayTi8(self.parse_uniform_array(array_len, &Self::parse_i8))
                     }
                     JID_INT16 => {  // TODO: make more effective, less repetative
-                        self.parse_uniform_array(array_len, &Self::parse_i16)
-                            .iter()
-                            .map(|x| -> ReaderElement { ReaderElement::Int(*x as i64) }).collect()
+                        UniformArrayType::UniformArrayTi16(self.parse_uniform_array(array_len, &Self::parse_i16))
                     }
                     JID_INT32 => {
-                        self.parse_uniform_array(array_len, &Self::parse_i32)
-                            .iter()
-                            .map(|x| -> ReaderElement { ReaderElement::Int(*x as i64) }).collect()
+                        UniformArrayType::UniformArrayTi32(self.parse_uniform_array(array_len, &Self::parse_i32))
                     }
                     JID_INT64 => {
-                        self.parse_uniform_array(array_len, &Self::parse_i64)
-                            .iter()
-                            .map(|x| -> ReaderElement { ReaderElement::Int(*x as i64) }).collect()
+                        UniformArrayType::UniformArrayTi64(self.parse_uniform_array(array_len, &Self::parse_i64))
                     }
                     JID_UINT8 => {
-                        self.parse_uniform_array(array_len, &Self::parse_u8)
-                            .iter()
-                            .map(|x| -> ReaderElement { ReaderElement::Int(*x as i64) }).collect()
+                        UniformArrayType::UniformArrayTu8(self.parse_uniform_array(array_len, &Self::parse_u8))
                     }
                     JID_UINT16 => {
-                        self.parse_uniform_array(array_len, &Self::parse_u16)
-                            .iter()
-                            .map(|x| -> ReaderElement { ReaderElement::Int(*x as i64) }).collect()
+                        UniformArrayType::UniformArrayTu16(self.parse_uniform_array(array_len, &Self::parse_u16))
                     }
                     JID_REAL16 => {
-                        self.parse_uniform_array(array_len, &Self::parse_f16)
-                            .iter()
-                            .map(|x| -> ReaderElement { ReaderElement::Float(*x as f64) }).collect()
+                        UniformArrayType::UniformArrayTf16(self.parse_uniform_array(array_len, &Self::parse_f16))
                     }
                     JID_REAL32 => {
-                        self.parse_uniform_array(array_len, &Self::parse_f32)
-                            .iter()
-                            .map(|x| -> ReaderElement { ReaderElement::Float(*x as f64) }).collect()
+                        UniformArrayType::UniformArrayTf32(self.parse_uniform_array(array_len, &Self::parse_f32))
                     }
                     JID_REAL64 => {
-                        self.parse_uniform_array(array_len, &Self::parse_f64)
-                            .iter()
-                            .map(|x| -> ReaderElement { ReaderElement::Float(*x as f64) }).collect()
+                        UniformArrayType::UniformArrayTf64(self.parse_uniform_array(array_len, &Self::parse_f64))
                     }
                     JID_BOOL => {
                         // packed blocks of 32 bits
@@ -364,11 +346,11 @@ impl<'a> BgeoParser<'a> {
                             self.chan.read_exact(&mut buff).expect("failed to read buffer");
                             let sample = (self.u32_from_bytes)(buff.try_into().expect("failed to convert bits"));
                             for i in 0..nbits {
-                                vec.push(ReaderElement::Bool(sample & (1 << i) != 0));
+                                vec.push(sample & (1 << i) != 0);
                             }
                             remaining_len -= nbits;
                         }
-                        vec
+                        UniformArrayType::UniformArrayTbool(vec)
                     }
                     JID_TOKENREF => {
                         panic!("not yet implemented!");
