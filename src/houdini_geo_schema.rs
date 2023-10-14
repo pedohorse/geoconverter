@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use crate::convert_from_trait::ConvertFromAll;
 use crate::geo_struct::{ReaderElement, UniformArrayType};
 
 pub struct HoudiniGeoSchemaParser<'a> {
@@ -168,17 +169,31 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
         }
     }
 
+    // parse values into a linear array of target type
+    // even if element is tuple, we still produce liear array here, an later will use tuple_size for proper indexing
     fn parse_values<T>(
         values: &ReaderElement,
         tuple_size: usize,
         reader_element_mapper: &dyn Fn(&ReaderElement) -> T,
-        starting_capacity: usize,
-    ) -> Vec<T> {
-        let mut attrib_values: Vec<T> = if starting_capacity == 0 {
+        number_of_elements: usize,
+    ) -> Vec<T>
+    where
+        T: Copy
+            + Default
+            + ConvertFromAll<f32>
+            + ConvertFromAll<f64>
+            + ConvertFromAll<u8>
+            + ConvertFromAll<u16>
+            + ConvertFromAll<i8>
+            + ConvertFromAll<i16>
+            + ConvertFromAll<i32>
+            + ConvertFromAll<i64>,
+    {
+        let mut attrib_values: Vec<T> = if number_of_elements == 0 {
             Vec::new()
         } else {
             Vec::with_capacity(
-                starting_capacity
+                number_of_elements
                     * if let Some(ReaderElement::Int(x)) = get_from_kv_array(values, "size") {
                         *x as usize
                     } else {
@@ -220,11 +235,185 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                 panic!("bad schema! arrays had no arrays!")
             };
             attrib_values.extend(indices.iter().map(reader_element_mapper));
+        } else if let Some(raw_page_data) = get_from_kv_array(values, "rawpagedata") {
+            let segment = match raw_page_data {
+                ReaderElement::UniformArray(UniformArrayType::UniformArrayTf16(vec)) => {
+                    Self::parse_rawpackagedata::<T, f32>(values, vec, number_of_elements, tuple_size)
+                }
+                ReaderElement::UniformArray(UniformArrayType::UniformArrayTf32(vec)) => {
+                    Self::parse_rawpackagedata::<T, f32>(values, vec, number_of_elements, tuple_size)
+                }
+                ReaderElement::UniformArray(UniformArrayType::UniformArrayTf64(vec)) => {
+                    Self::parse_rawpackagedata::<T, f64>(values, vec, number_of_elements, tuple_size)
+                }
+                ReaderElement::UniformArray(UniformArrayType::UniformArrayTi8(vec)) => {
+                    Self::parse_rawpackagedata::<T, i8>(values, vec, number_of_elements, tuple_size)
+                }
+                ReaderElement::UniformArray(UniformArrayType::UniformArrayTi16(vec)) => {
+                    Self::parse_rawpackagedata::<T, i16>(values, vec, number_of_elements, tuple_size)
+                }
+                ReaderElement::UniformArray(UniformArrayType::UniformArrayTi32(vec)) => {
+                    Self::parse_rawpackagedata::<T, i32>(values, vec, number_of_elements, tuple_size)
+                }
+                ReaderElement::UniformArray(UniformArrayType::UniformArrayTi64(vec)) => {
+                    Self::parse_rawpackagedata::<T, i64>(values, vec, number_of_elements, tuple_size)
+                }
+                ReaderElement::UniformArray(UniformArrayType::UniformArrayTu8(vec)) => {
+                    Self::parse_rawpackagedata::<T, u8>(values, vec, number_of_elements, tuple_size)
+                }
+                ReaderElement::UniformArray(UniformArrayType::UniformArrayTu16(vec)) => {
+                    Self::parse_rawpackagedata::<T, u16>(values, vec, number_of_elements, tuple_size)
+                }
+                _ => {
+                    panic!("Unexpected array type");
+                }
+            };
+            attrib_values.extend(segment);
         } else {
             panic!("rawpagedata support not implemented yet");
         }
 
         attrib_values
+    }
+
+    // raw_page_data must be from values. it's in args just to not get it twice
+    fn parse_rawpackagedata<T: Copy + Default + ConvertFromAll<K>, K: Copy>(
+        values: &ReaderElement,
+        raw_page_array: &Vec<K>,
+        number_of_elements: usize,
+        tuple_size: usize,
+    ) -> Vec<T> {
+        // rawpackagedata case
+        // read minimal explanation here: https://www.sidefx.com/docs/hdk/_h_d_k__g_a__using.html#HDK_GA_FileFormat
+        let size = if let Some(ReaderElement::Int(x)) = get_from_kv_array(values, "size") {
+            *x as usize
+        } else {
+            panic!("bad schemd! vector size not found!");
+        };
+        let page_size = if let Some(ReaderElement::Int(x)) = get_from_kv_array(values, "pagesize") {
+            *x as usize
+        } else {
+            panic!("bad schemd! vector size not found!");
+        };
+        let packing = match get_from_kv_array(values, "packing") {
+            Some(ReaderElement::Array(packing_array)) => {
+                packing_array
+                    .iter()
+                    .map(|x| {
+                        match x {
+                            ReaderElement::Int(v) => *v as usize,
+                            ReaderElement::Bool(v) => *v as usize, // wtf is this case even possible?
+                            _ => {
+                                panic!("bad schema! unexpected data type in packing element array");
+                            }
+                        }
+                    })
+                    .collect()
+            }
+            Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTu8(v))) => {
+                v.into_iter().map(|x| *x as usize).collect()
+            }
+            Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTu16(v))) => {
+                v.into_iter().map(|x| *x as usize).collect()
+            }
+            Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi8(v))) => {
+                v.into_iter().map(|x| *x as usize).collect()
+            }
+            Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi16(v))) => {
+                v.into_iter().map(|x| *x as usize).collect()
+            }
+            Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi32(v))) => {
+                v.into_iter().map(|x| *x as usize).collect()
+            }
+            Some(ReaderElement::UniformArray(UniformArrayType::UniformArrayTi64(v))) => {
+                v.into_iter().map(|x| *x as usize).collect()
+            }
+            None => vec![size],
+            _ => {
+                panic!("bad schema! unknown packing data representation");
+            }
+        };
+        let constant_page_flags: Vec<Vec<bool>> =
+            if let Some(ReaderElement::Array(packing_array)) = get_from_kv_array(values, "constantpageflags") {
+                let mut page_flags = Vec::with_capacity(packing.len());
+
+                for packing_subvector in packing_array {
+                    page_flags.push(match packing_subvector {
+                        ReaderElement::Array(vec) => vec
+                            .iter()
+                            .map(|x| -> bool {
+                                match x {
+                                    ReaderElement::Bool(v) => *v,
+                                    ReaderElement::Int(v) => *v != 0,
+                                    _ => {
+                                        panic!("bad schema! packing subvector has unexpected element {:?}", x);
+                                    }
+                                }
+                            })
+                            .collect(),
+                        _ => {
+                            panic!("bad schema! element of constantpageflags is not an array")
+                        }
+                    });
+                }
+
+                page_flags
+            } else {
+                vec![vec![]]
+            };
+
+        let mut cur_page = 0;
+        let mut elements_left = number_of_elements;
+        let mut cur_array_i = 0;
+
+        // let raw_page_array = if let ReaderElement::UniformArray(UniformArrayType::UniformArrayTi32(x)) = raw_page_data { x } else {
+        //     panic!("not implemented yet");
+        //     // TODO: need to implement for ALL possible uniform arrays, loop below should be made into a yet another generic func? or macro?
+        // };
+
+        let mut result: Vec<T> = Vec::with_capacity(number_of_elements * tuple_size);
+        result.resize(number_of_elements * tuple_size, T::default());
+
+        while elements_left > 0 {
+            let base_idx = page_size * cur_page * tuple_size;
+            let mut base_subvec_i = 0;
+
+            // for each subvector as defined by packing info
+            for (cur_subvector, subvec_size) in packing.iter().enumerate() {
+                if constant_page_flags[cur_subvector].len() == 0 || !constant_page_flags[cur_subvector][cur_page] {
+                    // if page flags empty or flag shows non-constant page
+
+                    // copy entire page data
+                    for i in 0..page_size.min(elements_left) {
+                        let base = base_idx + i * tuple_size + base_subvec_i;
+                        for k in 0..*subvec_size {
+                            result[base..base + subvec_size][k] =
+                                T::convert_from(raw_page_array[cur_array_i..cur_array_i + subvec_size][k]);
+                        }
+                        cur_array_i += subvec_size;
+                    }
+                    base_subvec_i += subvec_size;
+                } else {
+                    // the page is constant for subvector, it contains a single value
+                    let val: Vec<T> = raw_page_array[cur_array_i..cur_array_i + subvec_size]
+                        .iter()
+                        .map(|x| T::convert_from(*x))
+                        .collect();
+                    cur_array_i += subvec_size;
+                    // fill entire page data with same value
+                    for i in 0..page_size.min(elements_left) {
+                        let base = base_idx + i * tuple_size + base_subvec_i;
+                        result[base..base + subvec_size].copy_from_slice(&val);
+                    }
+                }
+            }
+            elements_left -= page_size.min(elements_left);
+            cur_page += 1;
+        }
+
+        assert_eq!(cur_array_i, raw_page_array.len()); // sanity check
+
+        result
     }
 
     pub fn parse_point_attributes(&mut self) {
