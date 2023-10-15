@@ -40,6 +40,16 @@ impl<'a> BuffChannel<'a> {
         }
     }
 
+    pub fn populate_with(&mut self, data: &[u8]) {
+        if self.i > self.start {
+            panic!("cannot prepopulate when already reading from it");
+        }
+        if self.buff.len() < self.start + data.len() {
+            self.buff.resize(self.start + data.len(), 0);
+        }
+        self.buff[self.start..self.start + data.len()].copy_from_slice(data);
+    }
+
     fn buffer_moar(&mut self) -> Option<()> {
         let chunk = self.chunk_size;
         let old_size = self.buff.len();
@@ -54,6 +64,7 @@ impl<'a> BuffChannel<'a> {
         let mut offset = 0;
         for i in old_size..self.buff.len() {
             if self.buff[i].is_ascii_whitespace() {
+                // TODO: i'm an idiot - this eats spaces from string constants
                 offset += 1;
                 continue;
             }
@@ -67,7 +78,7 @@ impl<'a> BuffChannel<'a> {
         Some(())
     }
 
-    pub fn peak(&mut self) -> Option<u8> {
+    pub fn peek(&mut self) -> Option<u8> {
         //println!("{} {} {:?}", self.start, self.i, self.buff);
         if self.i == self.buff.len() {
             // buffer is empty
@@ -89,7 +100,7 @@ impl<'a> BuffChannel<'a> {
     }
 
     pub fn get(&mut self) -> Option<u8> {
-        let x = self.peak();
+        let x = self.peek();
         self.i += 1;
         x
     }
@@ -108,6 +119,24 @@ impl<'a> BuffChannel<'a> {
             self.start = self.i;
         }
     }
+
+    pub fn peek_skip_whitespaces(&mut self) -> Option<u8> {
+        loop {
+            match self.peek() {
+                Some(x) if x.is_ascii_whitespace() => {
+                    self.consume();
+                }
+                Some(x) => return Some(x),
+                None => return None,
+            };
+        }
+    }
+
+    pub fn get_skip_whitespaces(&mut self) -> Option<u8> {
+        let x = self.peek_skip_whitespaces();
+        self.i += 1;
+        x
+    }
 }
 
 fn parse_one_element(chan: &mut BuffChannel) -> ReaderElement {
@@ -115,7 +144,7 @@ fn parse_one_element(chan: &mut BuffChannel) -> ReaderElement {
 
     let mut value = ReaderElement::None;
 
-    match chan.peak() {
+    match chan.peek_skip_whitespaces() {
         Some(b'[') => {
             state = ReaderState::Array;
         }
@@ -141,8 +170,9 @@ fn parse_one_element(chan: &mut BuffChannel) -> ReaderElement {
     match state {
         ReaderState::Off => {} // nothing, though it should happen only on empty input
         ReaderState::Number => {
+            chan.reset_buffer();
             loop {
-                let c = chan.peak().expect("unexpected end of file");
+                let c = chan.peek().expect("unexpected end of file");
                 if !c.is_ascii_digit() {
                     if c == b'.' {
                         // we should ensure there's one dot, but meh
@@ -184,13 +214,12 @@ fn parse_one_element(chan: &mut BuffChannel) -> ReaderElement {
             if chan.get().expect("internal error") != b'[' {
                 panic!("internal error");
             }
-            if chan.peak().expect("unable to parse file") != b']' {
+            if chan.peek_skip_whitespaces().expect("unable to parse file") != b']' {
                 // empty array
                 loop {
-                    chan.reset_buffer();
                     let arr_value = parse_one_element(chan);
                     arr.push(arr_value);
-                    match chan.get() {
+                    match chan.get_skip_whitespaces() {
                         Some(b',') => continue,
                         Some(b']') => break,
                         x => panic!(
@@ -210,22 +239,20 @@ fn parse_one_element(chan: &mut BuffChannel) -> ReaderElement {
             if chan.get().expect("internal error") != b'{' {
                 panic!("internal error");
             }
-            if chan.peak().expect("unable to parse file") != b'}' {
+            if chan.peek_skip_whitespaces().expect("unable to parse file") != b'}' {
                 // empty map
                 loop {
-                    chan.reset_buffer();
                     let mkey = parse_one_element(chan);
-                    if chan.get().expect("internal error") != b':' {
+                    if chan.get_skip_whitespaces().expect("internal error") != b':' {
                         panic!("internal error");
                     }
-                    chan.reset_buffer();
                     let mval = parse_one_element(chan);
                     if let ReaderElement::Text(text) = mkey {
                         hmap.insert(text, mval);
                     } else {
                         panic!("non-string keys are not yet supported")
                     }
-                    match chan.get() {
+                    match chan.get_skip_whitespaces() {
                         Some(b',') => continue,
                         Some(b'}') => break,
                         _ => panic!("bad dict!"),
@@ -244,7 +271,7 @@ fn parse_one_element(chan: &mut BuffChannel) -> ReaderElement {
 
             let mut next_escaped = false;
             loop {
-                let char = chan.peak().expect("unexpected end of file");
+                let char = chan.peek().expect("unexpected end of file");
                 if next_escaped {
                     next_escaped = false;
                 } else if char == b'\\' {
@@ -260,8 +287,13 @@ fn parse_one_element(chan: &mut BuffChannel) -> ReaderElement {
             chan.consume(); // eat closing "
         }
         ReaderState::Keyword => {
+            if !chan.peek().expect("internal error").is_ascii_alphabetic() {
+                panic!("internal error");
+            }
+            chan.reset_buffer();
+
             loop {
-                let char = chan.peak().expect("unexpected end of file");
+                let char = chan.peek().expect("unexpected end of file");
                 if !char.is_ascii_alphanumeric() {
                     break;
                 };
@@ -286,7 +318,18 @@ fn parse_one_element(chan: &mut BuffChannel) -> ReaderElement {
     return value;
 }
 
-pub fn parse(input: &mut dyn std::io::Read) -> ReaderElement {
+pub fn parse_ascii_first_byte_separately(
+    first_byte: u8,
+    input: &mut dyn std::io::Read,
+) -> ReaderElement {
+    // TODO: we already buffer from outside, rework this
+    let mut chan = BuffChannel::new(input, 1024 * 128, 0);
+    let buff = [first_byte; 1];
+    chan.populate_with(&buff);
+    return parse_one_element(&mut chan);
+}
+
+pub fn parse_ascii(input: &mut dyn std::io::Read) -> ReaderElement {
     //let mut buf = String::new();
 
     let mut chan = BuffChannel::new(input, 1024 * 128, 0);
