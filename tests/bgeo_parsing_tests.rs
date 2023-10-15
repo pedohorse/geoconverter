@@ -1,4 +1,4 @@
-use geoconverter::{self, ReaderElement};
+use geoconverter::{ReaderElement, UniformArrayType};
 
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -38,26 +38,35 @@ fn parse_box_helper(filepath: &str, parser: & dyn Fn(&mut dyn Read) -> ReaderEle
         }
         if let ReaderElement::Array(topo_arr) = &root_arr[13] {
             if let ReaderElement::Array(pref_arr) = &topo_arr[1] {
-                if let ReaderElement::Array(ind_arr) = &pref_arr[1] {
-                    let expected_indices = [
-                        0_i64, 1, 3, 2, 4, 5, 7, 6, 6, 7, 2, 3, 5, 4, 1, 0, 5, 0, 2, 7, 1, 4, 6, 3,
-                    ];
-                    assert_eq!(ind_arr.len(), expected_indices.len());
-                    for (i, idx) in expected_indices.iter().enumerate() {
-                        if let ReaderElement::Int(x) = ind_arr[i] {
-                            assert_eq!(x, *idx);
-                        } else {
-                            assert!(false);
+                let expected_indices = [
+                    0_i64, 1, 3, 2, 4, 5, 7, 6, 6, 7, 2, 3, 5, 4, 1, 0, 5, 0, 2, 7, 1, 4, 6, 3,
+                ];
+                match &pref_arr[1] {
+                    ReaderElement::Array(ind_arr) => {
+                        assert_eq!(ind_arr.len(), expected_indices.len());
+                        for (i, idx) in expected_indices.iter().enumerate() {
+                            if let ReaderElement::Int(x) = ind_arr[i] {
+                                assert_eq!(x, *idx);
+                            } else {
+                                assert!(false);
+                            }
                         }
                     }
-                } else {
-                    assert!(false);
+                    ReaderElement::UniformArray(UniformArrayType::UniformArrayTi16(ind_arr)) => {
+                        assert_eq!(ind_arr.len(), expected_indices.len());
+                        for (i, idx) in expected_indices.iter().enumerate() {
+                                assert_eq!(ind_arr[i], *idx as i16);
+                        }
+                    }
+                    _ => {
+                        assert!(false, "index array is of unexpected type: {:?}", &pref_arr[1]);
+                    }
                 }
             } else {
-                assert!(false);
+                assert!(false, "point ref array is of unexpected type: {:?}", &topo_arr[1]);
             }
         } else {
-            assert!(false);
+            assert!(false, "topo array is of unexpected type: {:?}", &root_arr[13]);
         }
     } else {
         assert!(false);
