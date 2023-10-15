@@ -29,6 +29,7 @@ pub struct TokenGeoAttribute {
 }
 
 pub trait GeoAttribute<'a, T: ?Sized> {
+    fn tuple_size(&'a self) -> usize;
     fn value(&'a self, number: usize) -> &'a T;
 }
 
@@ -36,12 +37,20 @@ impl<'a, T: Copy> GeoAttribute<'a, [T]> for TupleGeoAttribute<T> {
     fn value(&'a self, number: usize) -> &'a [T] {
         &self.data[number * self.tuple_size..(number + 1) * self.tuple_size]
     }
+
+    fn tuple_size(&'a self) -> usize{
+        self.tuple_size
+    }
 }
 
 impl<'a> GeoAttribute<'a, String> for TokenGeoAttribute {
     fn value(&'a self, number: usize) -> &'a String {
         let shit = self.data[number];
         &self.tokens[shit]
+    }
+
+    fn tuple_size(&'a self) -> usize{
+        1
     }
 }
 
@@ -98,8 +107,13 @@ fn get_from_any_kv_array<'a>(arr_elem: &'a ReaderElement, keys: &[&str]) -> Opti
 }
 
 impl<'a> HoudiniGeoSchemaParser<'a> {
-    //fn uniform_array_index_parser(uniarr<)
-
+    
+    /// construct new instance of HoudiniGeoSchemaParser
+    /// 
+    /// note that to access element attributes and primitives 
+    /// you have to parse them beforehand explicitly
+    /// 
+    /// you should only parse what you need for particular geo conversion
     pub fn new(read_structure: &'a ReaderElement) -> HoudiniGeoSchemaParser<'a> {
         let indices = if let Some(topo) = get_from_kv_array(read_structure, "topology") {
             if let Some(pointref) = get_from_kv_array(topo, "pointref") {
@@ -169,8 +183,24 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
         }
     }
 
-    // parse values into a linear array of target type
-    // even if element is tuple, we still produce liear array here, an later will use tuple_size for proper indexing
+    /// parse values into a linear array of target type
+    /// values in geo file may look somewhat like this:
+    /// "values",[
+    ///    "size",3,
+    ///    "storage","fpreal32",
+    ///    "tuples",[[0.5,-0.5,0.5],[-0.5,-0.5,0.5],[0.5,0.5,0.5],[-0.5,0.5,0.5],[-0.5,
+    ///  ]
+    /// 
+    /// or it can be called "incides", but be very similar in structure:
+    /// "indices",[
+    ///    "size",1,
+    ///    "storage","int32",
+    ///    "arrays",[[0,0,0,0,0,0,0,0]]
+    /// ]
+    /// 
+    /// or, mostly in bgeo case, it will have rawpagedata, see function below that deals with that
+    /// 
+    /// even if element is tuple, we still produce liear array here, an later will use tuple_size for proper indexing
     fn parse_values<T>(
         values: &ReaderElement,
         tuple_size: usize,
@@ -238,31 +268,31 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
         } else if let Some(raw_page_data) = get_from_kv_array(values, "rawpagedata") {
             let segment = match raw_page_data {
                 ReaderElement::UniformArray(UniformArrayType::UniformArrayTf16(vec)) => {
-                    Self::parse_rawpackagedata::<T, f32>(values, vec, number_of_elements, tuple_size)
+                    Self::parse_rawpagedata::<T, f32>(values, vec, number_of_elements, tuple_size)
                 }
                 ReaderElement::UniformArray(UniformArrayType::UniformArrayTf32(vec)) => {
-                    Self::parse_rawpackagedata::<T, f32>(values, vec, number_of_elements, tuple_size)
+                    Self::parse_rawpagedata::<T, f32>(values, vec, number_of_elements, tuple_size)
                 }
                 ReaderElement::UniformArray(UniformArrayType::UniformArrayTf64(vec)) => {
-                    Self::parse_rawpackagedata::<T, f64>(values, vec, number_of_elements, tuple_size)
+                    Self::parse_rawpagedata::<T, f64>(values, vec, number_of_elements, tuple_size)
                 }
                 ReaderElement::UniformArray(UniformArrayType::UniformArrayTi8(vec)) => {
-                    Self::parse_rawpackagedata::<T, i8>(values, vec, number_of_elements, tuple_size)
+                    Self::parse_rawpagedata::<T, i8>(values, vec, number_of_elements, tuple_size)
                 }
                 ReaderElement::UniformArray(UniformArrayType::UniformArrayTi16(vec)) => {
-                    Self::parse_rawpackagedata::<T, i16>(values, vec, number_of_elements, tuple_size)
+                    Self::parse_rawpagedata::<T, i16>(values, vec, number_of_elements, tuple_size)
                 }
                 ReaderElement::UniformArray(UniformArrayType::UniformArrayTi32(vec)) => {
-                    Self::parse_rawpackagedata::<T, i32>(values, vec, number_of_elements, tuple_size)
+                    Self::parse_rawpagedata::<T, i32>(values, vec, number_of_elements, tuple_size)
                 }
                 ReaderElement::UniformArray(UniformArrayType::UniformArrayTi64(vec)) => {
-                    Self::parse_rawpackagedata::<T, i64>(values, vec, number_of_elements, tuple_size)
+                    Self::parse_rawpagedata::<T, i64>(values, vec, number_of_elements, tuple_size)
                 }
                 ReaderElement::UniformArray(UniformArrayType::UniformArrayTu8(vec)) => {
-                    Self::parse_rawpackagedata::<T, u8>(values, vec, number_of_elements, tuple_size)
+                    Self::parse_rawpagedata::<T, u8>(values, vec, number_of_elements, tuple_size)
                 }
                 ReaderElement::UniformArray(UniformArrayType::UniformArrayTu16(vec)) => {
-                    Self::parse_rawpackagedata::<T, u16>(values, vec, number_of_elements, tuple_size)
+                    Self::parse_rawpagedata::<T, u16>(values, vec, number_of_elements, tuple_size)
                 }
                 _ => {
                     panic!("Unexpected array type");
@@ -276,15 +306,28 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
         attrib_values
     }
 
-    // raw_page_data must be from values. it's in args just to not get it twice
-    fn parse_rawpackagedata<T: Copy + Default + ConvertFromAll<K>, K: Copy>(
+    /// this function deals with rawpagedata
+    /// 
+    ///  typically it looks like this:
+    /// "values", [
+    ///    "size", 3,
+    ///    "storage", "fpreal32",
+    ///    "packing", [3],
+    ///    "pagesize", 1024,
+    ///    "constantpageflags", [[]],
+    ///    "rawpagedata", [0.5, -0.5, 0.5, -0.]
+    /// 
+    /// see details read minimal explanation here: https://www.sidefx.com/docs/hdk/_h_d_k__g_a__using.html#HDK_GA_FileFormat
+    /// 
+    /// raw_page_data must be from values. it's in args just to not get it twice
+    fn parse_rawpagedata<T: Copy + Default + ConvertFromAll<K>, K: Copy>(
         values: &ReaderElement,
         raw_page_array: &Vec<K>,
         number_of_elements: usize,
         tuple_size: usize,
     ) -> Vec<T> {
         // rawpackagedata case
-        // read minimal explanation here: https://www.sidefx.com/docs/hdk/_h_d_k__g_a__using.html#HDK_GA_FileFormat
+
         let size = if let Some(ReaderElement::Int(x)) = get_from_kv_array(values, "size") {
             *x as usize
         } else {
@@ -334,11 +377,11 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
             }
         };
         let constant_page_flags: Vec<Vec<bool>> =
-            if let Some(ReaderElement::Array(packing_array)) = get_from_kv_array(values, "constantpageflags") {
+            if let Some(ReaderElement::Array(flag_array)) = get_from_kv_array(values, "constantpageflags") {
                 let mut page_flags = Vec::with_capacity(packing.len());
 
-                for packing_subvector in packing_array {
-                    page_flags.push(match packing_subvector {
+                for flag_subvector in flag_array {
+                    page_flags.push(match flag_subvector {
                         ReaderElement::Array(vec) => vec
                             .iter()
                             .map(|x| -> bool {
@@ -351,6 +394,9 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                                 }
                             })
                             .collect(),
+                        ReaderElement::UniformArray(UniformArrayType::UniformArrayTbool(vec)) => {
+                            vec.clone()  // TODO: this may be a reference instead, but then prev arm need to be rethought
+                        },
                         _ => {
                             panic!("bad schema! element of constantpageflags is not an array")
                         }
@@ -365,11 +411,6 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
         let mut cur_page = 0;
         let mut elements_left = number_of_elements;
         let mut cur_array_i = 0;
-
-        // let raw_page_array = if let ReaderElement::UniformArray(UniformArrayType::UniformArrayTi32(x)) = raw_page_data { x } else {
-        //     panic!("not implemented yet");
-        //     // TODO: need to implement for ALL possible uniform arrays, loop below should be made into a yet another generic func? or macro?
-        // };
 
         let mut result: Vec<T> = Vec::with_capacity(number_of_elements * tuple_size);
         result.resize(number_of_elements * tuple_size, T::default());
@@ -416,18 +457,30 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
         result
     }
 
+    /// parse point attributes
+    /// 
     pub fn parse_point_attributes(&mut self) {
         self._point_attributes = Self::parse_attributes(self.structure, "pointattributes", "pointcount");
     }
 
+    /// parse vertex attributes
+    /// 
     pub fn parse_vertex_attributes(&mut self) {
         self._vertex_attributes = Self::parse_attributes(self.structure, "vertexattributes", "vertexcount");
     }
 
+    /// parse primitive attributes
+    /// 
     pub fn parse_primitive_attributes(&mut self) {
         self._prim_attributes = Self::parse_attributes(self.structure, "primitiveattributes", "primitivecount");
     }
 
+    /// parse general attribute structure
+    /// 
+    /// * `structure` - overall schema
+    /// * `attrib_key` - name of the key where to find attributes
+    /// * `elem_count_key` - key name of where to find element count
+    /// 
     fn parse_attributes(
         structure: &'a ReaderElement,
         attrib_key: &str,
@@ -579,6 +632,11 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
         Some(attribute_map)
     }
 
+    /// parse primitives from geo structure
+    /// 
+    /// for now only polygons are supported
+    /// 
+    /// TODO: support other types of primitives
     pub fn parse_primitives(&mut self) {
         let mut polygons = Vec::with_capacity(self._prim_count);
         let mut cur_prim_num: usize = 0;
@@ -629,13 +687,6 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                 } else {
                     panic!("unexpected type!")
                 } as usize;
-            // let num_prims = if let Some(ReaderElement::Int(x)) =
-            //     get_from_kv_array(&prim_block_arr[1], "nprimitives")
-            // {
-            //     *x as usize
-            // } else {
-            //     panic!("unexpected type!")
-            // };
 
             // it's either nvertices_rle or nvertices
 
@@ -769,7 +820,6 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                 }
             }
         }
-        println!("pp {}", cur_prim_num);
 
         self._polygons = Some(polygons);
     }
@@ -784,6 +834,22 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
         attrib_map.keys()
     }
 
+    /// get vertex attribute
+    ///
+    /// vertex attributes have to be parsed beforehand
+    pub fn vertex_attribute(&self, name: &str) -> Option<&GeoAttributeKind> {
+        let attrib_map = if let Some(x) = &self._vertex_attributes {
+            x
+        } else {
+            panic!("vertex attributes were not parsed!");
+        };
+
+        attrib_map.get(name)
+    }
+
+    /// get point attribute
+    ///
+    /// point attributes have to be parsed beforehand
     pub fn point_attribute(&self, name: &str) -> Option<&GeoAttributeKind> {
         let attrib_map = if let Some(x) = &self._point_attributes {
             x
@@ -794,6 +860,9 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
         attrib_map.get(name)
     }
 
+    /// get primitive attribute
+    ///
+    /// primitive attributes have to be parsed beforehand
     pub fn primitive_attribute(&self, name: &str) -> Option<&GeoAttributeKind> {
         let attrib_map = if let Some(x) = &self._prim_attributes {
             x
@@ -804,10 +873,15 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
         attrib_map.get(name)
     }
 
+    /// get point number of the point given vertex belongs to
+    /// 
     pub fn vtx_to_ptnum(&self, vtx_num: usize) -> usize {
         self._vertex_nums_to_point_nums[vtx_num]
     }
 
+    /// get polygons
+    /// 
+    /// primitives have to be parsed beforehand
     pub fn polygons(&self) -> &[GeoPolygon] {
         if let Some(p) = &self._polygons {
             return p;
@@ -816,14 +890,20 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
         }
     }
 
+    /// get primitive count
+    /// 
     pub fn primitive_count(&self) -> usize {
         self._prim_count
     }
 
+    /// get point count
+    /// 
     pub fn point_count(&self) -> usize {
         self._point_count
     }
 
+    /// get vertex count
+    /// 
     pub fn vertex_count(&self) -> usize {
         self._vertex_count
     }
