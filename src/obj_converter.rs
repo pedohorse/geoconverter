@@ -4,7 +4,7 @@ use crate::{
 };
 use std::io::Write;
 
-pub fn serialize_obj<F>(geo_schema: &mut HoudiniGeoSchemaParser, file: &mut F)
+pub fn serialize_obj<F: ?Sized>(geo_schema: &mut HoudiniGeoSchemaParser, file: &mut F)
 where
     F: Write,
 {

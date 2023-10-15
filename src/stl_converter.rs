@@ -75,7 +75,7 @@ pub fn create_stl_solid(geo_schema: &mut HoudiniGeoSchemaParser) -> StlSolid<f64
     StlSolid { faces: stl_faces }
 }
 
-pub fn serialize_stl<T, F>(stl_solid: &StlSolid<T>, file: &mut F)
+pub fn serialize_stl<T, F: ?Sized>(stl_solid: &StlSolid<T>, file: &mut F)
 where
     T: std::fmt::Display,
     F: Write,
