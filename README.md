@@ -7,17 +7,25 @@ But that does not mean it's not working
 
 ### Usage
 
-Input file has to be piped in, like 
+Input file can be piped in, like 
 
 `cat file.geo | geoconverter -t obj file_out.obj`
+
+Or specified as a file, like
+
+`geoconverter file_in.bgeo file_out.obj`
+
+(if `-t` is not provided - assumed output format is `obj`)
 
 supported output formats:
 * [x] obj
 * [x] stl
+* [x] geo
+* [ ] bgeo
 
 supporter input format:
 * [x] geo
-* [ ] bgeo
+* [x] bgeo
 
 ### Embedding transparently into Houdini
 
