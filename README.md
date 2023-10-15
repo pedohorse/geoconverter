@@ -4,6 +4,7 @@
 
 But that does not mean it's not working
 
+converts `geo`/`bgeo` geometry formats into some random other formats
 
 ### Usage
 
