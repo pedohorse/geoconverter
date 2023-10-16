@@ -22,7 +22,7 @@ supported output formats:
 * [x] obj
 * [x] stl
 * [x] geo
-* [ ] bgeo
+* [x] bgeo
 
 supporter input format:
 * [x] geo
