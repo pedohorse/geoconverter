@@ -2,37 +2,9 @@ use std::io::Read;
 
 use crate::geo_struct::{ReaderElement, UniformArrayType};
 use crate::f16_half::{half_from_be_bytes, half_from_le_bytes};
+use crate::bgeo_constants::*;
 use std::collections::HashMap;
 
-
-const JID_NULL: u8 = 0x00;
-const JID_MAP_BEGIN: u8 = 0x7b;
-const JID_MAP_END: u8 = 0x7d;
-const JID_ARRAY_BEGIN: u8 = 0x5b;
-const JID_ARRAY_END: u8 = 0x5d;
-const JID_BOOL: u8 = 0x10;
-const JID_INT8: u8 = 0x11;
-const JID_INT16: u8 = 0x12;
-const JID_INT32: u8 = 0x13;
-const JID_INT64: u8 = 0x14;
-const JID_REAL16: u8 = 0x18;
-const JID_REAL32: u8 = 0x19;
-const JID_REAL64: u8 = 0x1a;
-const JID_UINT8: u8 = 0x21;
-const JID_UINT16: u8 = 0x22;
-const JID_STRING: u8 = 0x27;
-const JID_FALSE: u8 = 0x30;
-const JID_TRUE: u8 = 0x31;
-const JID_TOKENDEF: u8 = 0x2b;
-const JID_TOKENREF: u8 = 0x26;
-const JID_TOKENUNDEF: u8 = 0x2d;
-const JID_UNIFORM_ARRAY: u8 = 0x40;
-const JID_KEY_SEPARATOR: u8 = 0x3a;
-const JID_VALUE_SEPARATOR: u8 = 0x2c;
-pub const JID_MAGIC: u8 = 0x7f;
-
-const BINARY_MAGIC: [u8; 4] = [0x62, 0x4a, 0x53, 0x4e];
-const BINARY_MAGIC_SWAP: [u8; 4] = [0x4e, 0x53, 0x4a, 0x62];
 
 #[derive(Debug)]
 enum ReaderElementOption {

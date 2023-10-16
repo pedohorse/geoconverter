@@ -2,8 +2,9 @@ mod parsing_ascii;
 mod parsing_bin;
 
 use crate::geo_struct::ReaderElement;
+use crate::bgeo_constants::JID_MAGIC;
 use parsing_ascii::parse_ascii_first_byte_separately;
-use parsing_bin::{parse_binary_first_byte_separately, JID_MAGIC};
+use parsing_bin::parse_binary_first_byte_separately;
 
 pub use parsing_ascii::parse_ascii;
 pub use parsing_bin::parse_binary;
