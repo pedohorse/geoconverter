@@ -5,6 +5,7 @@ mod stl_converter;
 mod obj_converter;
 mod f16_half;
 mod convert_from_trait;
+mod expressions;
 pub mod geo_struct_serializer;
 pub mod bgeo_struct_serializer;
 pub mod bgeo_constants;
