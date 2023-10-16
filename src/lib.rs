@@ -6,6 +6,8 @@ mod obj_converter;
 mod f16_half;
 mod convert_from_trait;
 pub mod geo_struct_serializer;
+pub mod bgeo_struct_serializer;
+pub mod bgeo_constants;
 
 pub use crate::geo_parsing::{parse_ascii, parse_binary, parse};
 pub use crate::geo_struct::{ReaderElement, UniformArrayType};

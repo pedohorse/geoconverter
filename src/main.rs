@@ -7,6 +7,7 @@ enum ConvertionType {
     Obj,
     Stl,
     Geo,
+    Bgeo,
 }
 
 enum InputType {
@@ -55,6 +56,7 @@ fn main() {
                 Some("obj") => (ConvertionType::Obj, file_path),
                 Some("stl") => (ConvertionType::Stl, file_path),
                 Some("geo") | Some("json") => (ConvertionType::Geo, file_path),
+                Some("bgeo") => (ConvertionType::Bgeo, file_path),
                 Some(s) => {
                     println!("wtf is type {}?", s);
                     std::process::exit(1);
@@ -104,7 +106,8 @@ fn main() {
     match converion_type {
         ConvertionType::Obj => convert_to_obj(&res, out_ref),
         ConvertionType::Stl => convert_to_stl(&res, out_ref),
-        ConvertionType::Geo => convert_to_geo(&res, out_ref),
+        ConvertionType::Geo => geoconverter::geo_struct_serializer::to_json(&res, out_ref),
+        ConvertionType::Bgeo => geoconverter::bgeo_struct_serializer::to_bjson(&res, out_ref),
     }
 
     // don't forget to flush (but does it matter in the end of the program?)
@@ -124,8 +127,4 @@ fn convert_to_obj(res: &ReaderElement, out: &mut dyn io::Write) {
     let mut schema_parser = HoudiniGeoSchemaParser::new(res);
 
     serialize_obj(&mut schema_parser, out);
-}
-
-fn convert_to_geo(res: &ReaderElement, out: &mut dyn io::Write) {
-    geoconverter::geo_struct_serializer::to_json(res, out);
 }
