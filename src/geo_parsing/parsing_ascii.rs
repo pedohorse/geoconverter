@@ -61,17 +61,6 @@ impl<'a> BuffChannel<'a> {
             .expect("read error");
         self.buff.resize(old_size + read_bytes, 0);
 
-        let mut offset = 0;
-        for i in old_size..self.buff.len() {
-            if self.buff[i].is_ascii_whitespace() {
-                // TODO: i'm an idiot - this eats spaces from string constants
-                offset += 1;
-                continue;
-            }
-            self.buff[i - offset] = self.buff[i];
-        }
-        self.buff.resize(self.buff.len() - offset, 0);
-
         if read_bytes == 0 {
             return None;
         }
@@ -79,7 +68,6 @@ impl<'a> BuffChannel<'a> {
     }
 
     pub fn peek(&mut self) -> Option<u8> {
-        //println!("{} {} {:?}", self.start, self.i, self.buff);
         if self.i == self.buff.len() {
             // buffer is empty
             if self.buffer_moar() == None {
