@@ -125,7 +125,7 @@ impl<'a> BgeoParser<'a> {
 
     fn parse_i16(&mut self) -> i16 {
         let mut buff = [0_u8; 2];
-        self.chan.read_exact(&mut buff).expect("unexpected end of buffer while reading i16");;
+        self.chan.read_exact(&mut buff).expect("unexpected end of buffer while reading i16");
         (self.i16_from_bytes)(buff)
     }
 
