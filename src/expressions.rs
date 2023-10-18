@@ -43,8 +43,8 @@ pub enum BindingValue {
 }
 
 pub struct Binding {
-    name: String,
-    value: BindingValue,
+    pub name: String,
+    pub value: BindingValue,
 }
 
 pub struct Error {
@@ -239,7 +239,7 @@ fn to_postfix(tokens_sequence: Vec<Token>) -> Result<Vec<Token>, Error> {
 }
 
 ///
-fn evaluate_postfix(postfix_sequence: &Vec<Token>, binding_map: &HashMap<u64, Binding>) -> Result<BindingValue, Error> {
+pub fn evaluate_postfix(postfix_sequence: &Vec<Token>, binding_map: &HashMap<u64, Binding>) -> Result<BindingValue, Error> {
     let mut stack: Vec<Token> = Vec::new();
     for token in postfix_sequence.iter() {
         match token {
@@ -454,8 +454,7 @@ mod tests {
         assert_eq!(binding_map.get_mut(&1).expect("missing binding 0").name, "bc");
         binding_map.get_mut(&0).expect("missing binding 0").value = BindingValue::Float(7.79);
         binding_map.get_mut(&1).expect("missing binding 0").value = BindingValue::Float(2.345);
-        let result = evaluate_postfix(&postfix, &binding_map)
-                                                  .expect("evaluation failed");
+        let result = evaluate_postfix(&postfix, &binding_map).expect("evaluation failed");
         {
             // check 3
             assert_eq!(result, BindingValue::Float(-235.775));
