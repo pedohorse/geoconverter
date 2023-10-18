@@ -95,6 +95,7 @@ fn parse_arguments(argv: &mut dyn Iterator<Item = String>) -> Result<ArgumentOpt
     let mut input_type: Option<InputType> = None;
     let mut output_type: Option<OutputType> = None;
     let mut flags = ExpectedFlag::NotExpecting;
+    let mut stashed_path: Option<String> = None;
 
     for arg in argv {
         match (arg.as_str(), &flags) {
@@ -117,20 +118,30 @@ fn parse_arguments(argv: &mut dyn Iterator<Item = String>) -> Result<ArgumentOpt
                 }
             }
             (file_path, ExpectedFlag::NotExpecting) => {
-                if let None = output_type {
-                    output_type = Some(OutputType::File(io::BufWriter::new(
-                        File::create(file_path).expect("could not create output file"),
-                    )));
-                } else if let None = input_type {
-                    input_type = Some(InputType::File(io::BufReader::new(
-                        File::open(file_path).expect("failed to open input file"),
-                    )));
-                };
+                match &stashed_path {
+                    None => {
+                        stashed_path = Some(arg);
+                    }
+                    Some(input_path) => {  // else it's the second positional argument, so we are ready to assign
+                        input_type = Some(InputType::File(io::BufReader::new(
+                            File::open(input_path).expect("failed to open input file"),
+                        )));
+                        output_type = Some(OutputType::File(io::BufWriter::new(
+                            File::create(file_path).expect("could not create output file"),
+                        )));
+                    }
+                }
             }
         }
     }
     if let None = output_type {
-        output_type = Some(OutputType::Stdout(io::stdout().lock()));
+        if let Some(file_path) = stashed_path {
+            output_type = Some(OutputType::File(io::BufWriter::new(
+                File::create(file_path).expect("could not create output file")
+            )));
+        } else {
+            output_type = Some(OutputType::Stdout(io::stdout().lock()));
+        }
     }
     if let None = input_type {
         input_type = Some(InputType::Stdin(io::stdin().lock()));
@@ -163,6 +174,8 @@ fn convert_to_obj(res: &ReaderElement, out: &mut dyn io::Write) {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
+
     use super::*;
 
     struct TempFile {
@@ -171,7 +184,8 @@ mod tests {
 
     impl TempFile {
         fn new(path: &'static str) -> TempFile {
-            File::create(path).expect("failed to create test file");
+            let mut file = File::create(path).expect("failed to create test file");
+            let n = file.write(path.as_bytes()).expect("failed to write to temp file");
             TempFile { path: path }
         }
     }
@@ -205,9 +219,15 @@ mod tests {
         match parse_arguments(&mut vec![foo_in.path.to_owned(), foo_out.path.to_owned()].into_iter()) {
             Ok(ArgumentOptions {
                 convertion_type: ConvertionType::Obj,
-                input_type: InputType::File(_),
-                output_type: OutputType::File(_),
+                input_type: InputType::File(mut fi),
+                output_type: OutputType::File(mut fo),
             }) => {
+                let mut buf = Vec::new();
+                fi.read_to_end(&mut buf).expect("failed to read from test input file");
+                assert_eq!(foo_in.path.as_bytes(), buf);
+                fo.write_all(&buf).expect("failed to write to test output file");
+                // TODO: test output file's contents
+
                 println!("check2 succ!");
             }
             _ => {
