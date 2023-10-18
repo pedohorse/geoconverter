@@ -3,7 +3,7 @@ use std::fmt;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Token {
-    Binding(u64),
+    Binding(usize),
     IntValue(i64),
     FloatValue(f64),
     BracketOpen,
@@ -42,9 +42,49 @@ pub enum BindingValue {
     Vector3([f64; 3]),
 }
 
+#[derive(Clone)]
 pub struct Binding {
     pub name: String,
     pub value: BindingValue,
+}
+
+pub struct PrecompiledCode {
+    postfix: Vec<Token>,
+    bindings: Vec<Binding>
+}
+
+impl PrecompiledCode {
+    pub fn binding_names<'a>(&'a self) -> Vec<&'a str> {
+        self.bindings.iter().map(|b| { b.name.as_str() }).collect()
+    }
+
+    pub fn binding_map_to_values(&self, binding_map: &HashMap<String, BindingValue>) -> Vec<BindingValue> {
+        self.bindings.iter().filter_map(|b| {
+            if let Some(value) = binding_map.get(&b.name) {
+                Some(*value)
+            } else {
+                None
+            }
+        }).collect()
+    }
+
+    pub fn clone_binding_values(&self) -> Vec<BindingValue> {
+        self.bindings.iter().map(|x| { x.value }).collect()
+    }
+
+    pub fn set_bindings_from_map(&mut self, binding_map: &HashMap<String, BindingValue>) {
+        for binding in self.bindings.iter_mut() {
+            if let Some(value) = binding_map.get(&binding.name) {
+                binding.value = *value;
+            }
+        }
+    }
+
+    pub fn set_bindings_from_vec(&mut self, bindings: &Vec<BindingValue>) {
+        for (binding, value) in self.bindings.iter_mut().zip(bindings.iter()) {
+            binding.value = *value;
+        }
+    }
 }
 
 pub struct Error {
@@ -73,9 +113,8 @@ enum ValueType {
 
 /// parses human readable expression into a token array
 /// returns token vector, and a map of binding nums to binding names
-fn tokenize(line: &str) -> Result<(Vec<Token>, HashMap<u64, Binding>), Error> {
-    let mut binding_map = HashMap::new();
-    let mut binding_map_cur_id = 0_u64;
+fn tokenize(line: &str) -> Result<(Vec<Token>, Vec<Binding>), Error> {
+    let mut bindings = Vec::new();
 
     let mut line_tokens: Vec<Token> = Vec::new();
     let mut token_start = 0;
@@ -99,15 +138,13 @@ fn tokenize(line: &str) -> Result<(Vec<Token>, HashMap<u64, Binding>), Error> {
                 }
                 ValueType::Binding => {
                     let token_name = line[token_start..=token_end].to_owned();
-                    binding_map.insert(
-                        binding_map_cur_id,
+                    bindings.push(
                         Binding {
                             name: token_name,
                             value: BindingValue::Unknown,
                         },
                     );
-                    line_tokens.push(Token::Binding(binding_map_cur_id));
-                    binding_map_cur_id += 1;
+                    line_tokens.push(Token::Binding(bindings.len() - 1));
                 }
                 ValueType::NotInitialized => {
                     // nothing, no token started
@@ -177,7 +214,7 @@ fn tokenize(line: &str) -> Result<(Vec<Token>, HashMap<u64, Binding>), Error> {
     }
     finalize_token_if_started!();
 
-    Ok((line_tokens, binding_map))
+    Ok((line_tokens, bindings))
 }
 
 fn to_postfix(tokens_sequence: Vec<Token>) -> Result<Vec<Token>, Error> {
@@ -239,19 +276,21 @@ fn to_postfix(tokens_sequence: Vec<Token>) -> Result<Vec<Token>, Error> {
 }
 
 ///
-pub fn evaluate_postfix(postfix_sequence: &Vec<Token>, binding_map: &HashMap<u64, Binding>) -> Result<BindingValue, Error> {
+fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>) -> Result<BindingValue, Error> {
     let mut stack: Vec<Token> = Vec::new();
     for token in postfix_sequence.iter() {
         match token {
             Token::IntValue(_) | Token::FloatValue(_) => stack.push(*token),
             Token::Binding(b) => {
-                let binding = binding_map.get(&b).expect("token id not present in token map!");
-                match &binding.value {
-                    BindingValue::Float(x) => stack.push(Token::FloatValue(*x)),
-                    BindingValue::Int(x) => stack.push(Token::IntValue(*x)),
+                let binding = bindings[*b as usize];
+                match binding {
+                    BindingValue::Float(x) => stack.push(Token::FloatValue(x)),
+                    BindingValue::Int(x) => stack.push(Token::IntValue(x)),
                     x @ BindingValue::Unknown => {
                         return Err(Error {
-                            message: format!("binding {:?} is not set", binding.name),
+                            message: format!("binding {:?} is not set", b),
+                            // TODO: error should provide binding num so that wrapping func may
+                            //  present a better formed error message
                         });
                     }
                     _ => {
@@ -323,28 +362,33 @@ pub fn evaluate_postfix(postfix_sequence: &Vec<Token>, binding_map: &HashMap<u64
     }
 }
 
-pub fn precompile_expression(expression: &str) -> (Vec<Token>, HashMap<u64, Binding>) {
+pub fn precompile_expression(expression: &str) -> PrecompiledCode {
     // TODO: provide proper expression error messages
-    let (tokenized, bind_map) = tokenize(expression).expect("error in expression");
-    (to_postfix(tokenized).expect("expressin syntax error"), bind_map)
+    let (tokenized, binds) = tokenize(expression).expect("error in expression");
+    PrecompiledCode {
+        postfix: to_postfix(tokenized).expect("expressin syntax error"),
+        bindings: binds        
+    }
 }
 
 pub fn evaluate_expression_precompiled(
-    postfix: &Vec<Token>,
-    binding_map: &mut HashMap<u64, Binding>,
+    precomp: &PrecompiledCode,
     binding_value_map: &HashMap<String, BindingValue>,
 ) -> Result<BindingValue, Error> {
-    for binding in binding_map.values_mut() {
-        if let Some(value) = binding_value_map.get(&binding.name) {
-            binding.value = *value;
-        }
-    }
-    evaluate_postfix(postfix, binding_map)
+    let mut bindings = precomp.binding_map_to_values(binding_value_map);
+    evaluate_postfix(&precomp.postfix, &bindings)
+}
+
+pub fn evaluate_expression_precompiled_with_bindings(
+    precomp: &PrecompiledCode,
+    bindings: &Vec<BindingValue>,
+) -> Result<BindingValue, Error> {
+    evaluate_postfix(&precomp.postfix, bindings)
 }
 
 pub fn evaluate_expression(expression: &str, binding_value_map: &HashMap<String, BindingValue>) -> Result<BindingValue, Error> {
-    let (postfix, mut binding_map) = precompile_expression(expression);
-    evaluate_expression_precompiled(&postfix, &mut binding_map, binding_value_map)
+    let precomp = precompile_expression(expression);
+    evaluate_expression_precompiled(&precomp, binding_value_map)
 }
 
 /// --------------------------------------------------
@@ -358,7 +402,7 @@ mod tests {
     #[test]
     fn test_parsing_simplest() {
         let expr = "5+33.33*22";
-        let (tokenized, binding_map) = tokenize(expr).expect("tokenization failed");
+        let (tokenized, bindings) = tokenize(expr).expect("tokenization failed");
 
         {
             // check 1
@@ -393,7 +437,7 @@ mod tests {
             }
         }
 
-        let result = evaluate_postfix(&postfix, &binding_map).expect("evaluation failed");
+        let result = evaluate_postfix(&postfix, &vec![]).expect("evaluation failed");
         {
             // check 3
             assert_eq!(result, BindingValue::Float(738.26));
@@ -403,7 +447,7 @@ mod tests {
     #[test]
     fn test_parsing_variables() {
         let expr = "-2*(3.4+@a)-91*@bc";
-        let (tokenized, mut binding_map) = tokenize(expr).expect("tokenization failed");
+        let (tokenized, bindings) = tokenize(expr).expect("tokenization failed");
 
         {
             // check 1
@@ -450,11 +494,13 @@ mod tests {
             }
         }
 
-        assert_eq!(binding_map.get_mut(&0).expect("missing binding 0").name, "a");
-        assert_eq!(binding_map.get_mut(&1).expect("missing binding 0").name, "bc");
-        binding_map.get_mut(&0).expect("missing binding 0").value = BindingValue::Float(7.79);
-        binding_map.get_mut(&1).expect("missing binding 0").value = BindingValue::Float(2.345);
-        let result = evaluate_postfix(&postfix, &binding_map).expect("evaluation failed");
+        assert_eq!(bindings[0].name, "a");
+        assert_eq!(bindings[1].name, "bc");
+        let mut bind_values: Vec<BindingValue> = bindings.iter().map(|b| { b.value }).collect();
+        bind_values[0] = BindingValue::Float(7.79);
+        bind_values[1] = BindingValue::Float(2.345);
+        
+        let result = evaluate_postfix(&postfix, &bind_values).expect("evaluation failed");
         {
             // check 3
             assert_eq!(result, BindingValue::Float(-235.775));

@@ -2,7 +2,7 @@ use std::borrow::BorrowMut;
 use std::collections::HashMap;
 use std::ops::Deref;
 
-use crate::expressions::{self, evaluate_expression_precompiled, evaluate_postfix, BindingValue};
+use crate::expressions::{self, evaluate_expression_precompiled, PrecompiledCode, BindingValue, evaluate_expression_precompiled_with_bindings};
 use crate::geo_struct::ReaderElement;
 use crate::houdini_geo_schema::{HoudiniGeoSchemaParser, GeoAttributeKind, GeoAttribute};
 
@@ -32,38 +32,42 @@ impl<'a> HoudiniGeoSchemaManipulator<'a> {
             panic!("no target point attribute '{}' found", target_attribute_name);
         };
 
-        let (postfix, mut bindings_map) = expressions::precompile_expression(expression);
+        let precomp = expressions::precompile_expression(expression);
+
+        let mut values = precomp.clone_binding_values();
 
         // TODO: this is all a prototype placeholder for now
-        let mut bind_attr_pairs = Vec::new();
-        let mut target_attr = match target_attribute_kind {
-            GeoAttributeKind::Float64(target_attr) => {
-                for (key, binding) in bindings_map.iter_mut() {
-                    if let Some(GeoAttributeKind::Float64(attr)) = self.schema_parser.point_attribute(&binding.name) {
-                        bind_attr_pairs.push((*key, attr));
-                    } else {
-                        // panic for now, maybe TODO some defaults later
-                        panic!("requested attribute {} not found", &binding.name);
-                    }
-                };
-                target_attr.clone()
-            }
-            _ => { panic!("only f64 attribs are supported in this prototype"); }
-        };
-
-        for elem in 0..target_attr.len() {
-            for (bid, attr) in bind_attr_pairs.iter_mut() {
-                bindings_map.get_mut(bid).expect("impossibry")
-                            .value = BindingValue::Float(attr.value(elem)[0]);
-            }
-            let val = evaluate_postfix(&postfix, &bindings_map).expect("failed to evaluate expression");
-            match val {
-                BindingValue::Float(f) => target_attr.set_value(elem, &[f]),
-                _ => { panic!("only f64 attribs are supported in this prototype"); }
+        let mut bind_attrs = Vec::new();
+        for (bind_val, attr_name) in values.iter_mut().zip(precomp.binding_names()) {
+            if let Some(GeoAttributeKind::Float64(attr)) = self.schema_parser.point_attribute(attr_name) {
+                bind_attrs.push(attr);
+            } else {
+                // panic for now, maybe TODO some defaults later
+                panic!("requested attribute {} not found", attr_name);
             }
         }
+
+        match target_attribute_kind {
+            GeoAttributeKind::Float64(target_attr_source) => {
+                let mut target_attr = target_attr_source.clone();
+
+                for elem in 0..target_attr.len() {
+                    for (bvalue, attr) in values.iter_mut().zip(bind_attrs.iter()) {
+                        *bvalue = BindingValue::Float(attr.value(elem)[0]);
+                    }
+                    let val = evaluate_expression_precompiled_with_bindings(&precomp, &values).expect("failed to evaluate expression");
+                    match val {
+                        BindingValue::Float(f) => target_attr.set_value(elem, &[f]),
+                        _ => { panic!("only f64 attribs are supported in this prototype"); }
+                    }
+                }
+
+                HoudiniGeoSchemaParser::write_to_strucutre(GeoAttributeKind::Float64(target_attr), &mut self.result_geo_data);
+            }
+            _ => { panic!("not yet implemented!"); }
+        }
         
-        HoudiniGeoSchemaParser::write_to_strucutre(GeoAttributeKind::Float64(target_attr), &mut self.result_geo_data);
+        
         // HoudiniGeoSchemaParser::get_point_attrib_element_mut(&mut self.result_geo_data)
         
     }
