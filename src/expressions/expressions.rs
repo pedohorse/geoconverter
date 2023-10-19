@@ -42,7 +42,7 @@ pub enum BindingValue {
     Unknown,
     Int(i64),
     Float(f64),
-    Vector3([f64; 3]),
+    Vector3(Vector<f64, 3>),
 }
 
 #[derive(Clone)]
@@ -102,7 +102,7 @@ impl fmt::Display for Error {
 
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "<ASS HAPPENED: {}>", self.message)
+        write!(f, "<ERROR HAPPENED: {}>", self.message)
     }
 }
 
@@ -289,6 +289,7 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
                 match binding {
                     BindingValue::Float(x) => stack.push(Token::FloatValue(x)),
                     BindingValue::Int(x) => stack.push(Token::IntValue(x)),
+                    BindingValue::Vector3(v) => stack.push(Token::VectorValue(v)),
                     x @ BindingValue::Unknown => {
                         return Err(Error {
                             message: format!("binding {:?} is not set", b),
@@ -330,8 +331,12 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
                 let mut matched = false;
 
                 macro_rules! sum_helper {
-                    ($opt1:tt, $opt2:tt, $res:tt, $rt1:ty, $rt2:ty) => {
+                    (
+                        $( $opt1:tt, $opt2:tt, $res:tt, $rt1:ty, $rt2:ty )|* ,
+                        $( $iopt1:tt, $iopt2:tt, $ires:tt, $irt1:ty, $irt2:ty )|*
+                    ) => {
                         match (val1, val2) {
+                        $(
                             (Some(Token::$opt1(x)), Some(Token::$opt2(y))) => {
                                 matched = true;
                                 stack.push(Token::$res(match token {
@@ -342,7 +347,29 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
                                     _ => panic!("impossibruuuu!!"),
                                 }));
                             }
-                            (Some(_), Some(_)) => (),
+                        )*
+                        $(
+                            (Some(Token::$iopt1(x)), Some(Token::$iopt2(y))) => {
+                                matched = true;
+                                stack.push(Token::$ires(match token {
+                                    Token::BinaryPlus => y as $irt2 + x as $irt1,
+                                    Token::BinaryMinus => y as $irt2 - x as $irt1,
+                                    Token::Multiply => y as $irt2 * x as $irt1,
+                                    Token::Divide => y as $irt2 / x as $irt1,
+                                    _ => panic!("impossibruuuu!!"),
+                                }));
+                            }
+                        )*
+                            (Some(x), Some(y)) => {
+                                return Err(Error {
+                                    message: format!(
+                                        "bad expression: operation {} is not defined for arguments {} and {}",
+                                        token,
+                                        x,
+                                        y
+                                    )
+                                })
+                            },
                             _ => {
                                 return Err(Error {
                                     message: format!("bad postfix: not enough operands for {}", token),
@@ -351,12 +378,17 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
                         };
                     };
                 }
-                sum_helper!(IntValue, IntValue, IntValue, i64, i64);
-                sum_helper!(IntValue, FloatValue, FloatValue, f64, f64);
-                sum_helper!(FloatValue, IntValue, FloatValue, f64, f64);
-                sum_helper!(FloatValue, FloatValue, FloatValue, f64, f64);
-                sum_helper!(VectorValue, FloatValue, VectorValue, Vector<f64, 3>, f64);
-                sum_helper!(VectorValue, IntValue, VectorValue, Vector<f64, 3>, f64);
+                sum_helper!(
+                    IntValue, IntValue, IntValue, i64, i64 |
+                    IntValue, FloatValue, FloatValue, f64, f64 |
+                    FloatValue, IntValue, FloatValue, f64, f64 |
+                    FloatValue, FloatValue, FloatValue, f64, f64 |
+                    VectorValue, FloatValue, VectorValue, Vector<f64, 3>, f64 |
+                    VectorValue, IntValue, VectorValue, Vector<f64, 3>, f64,
+                    // now swapped arg ops
+                    IntValue, VectorValue, VectorValue, f64, Vector<f64, 3> |
+                    FloatValue, VectorValue, VectorValue, f64, Vector<f64, 3>
+                );
 
                 if !matched {
                     return Err(Error {
@@ -370,8 +402,9 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
     match stack.pop() {
         Some(Token::IntValue(x)) => Ok(BindingValue::Int(x)),
         Some(Token::FloatValue(x)) => Ok(BindingValue::Float(x)),
+        Some(Token::VectorValue(x)) => Ok(BindingValue::Vector3(x)),
         _ => Err(Error {
-            message: format!("bad fostfix: there should be a value, but there isn't"),
+            message: format!("bad postfix: there should be a value, but there isn't"),
         }),
     }
 }

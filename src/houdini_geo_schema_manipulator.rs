@@ -52,9 +52,21 @@ impl<'a> HoudiniGeoSchemaManipulator<'a> {
 
                 for elem in 0..target_attr.len() {
                     for (bvalue, attr_kind) in values.iter_mut().zip(bind_attrs.iter()) {
+                        // TODO: this matching inside biiig loop is highly ineffective - surely we can match everything beforehand?
                         match attr_kind {
                             GeoAttributeKind::Float64(attr) => {
-                                *bvalue = BindingValue::Float(attr.value(elem)[0]);
+                                match attr.tuple_size() {
+                                    1 => {
+                                        *bvalue = BindingValue::Float(attr.value(elem)[0]);
+                                    }
+                                    3 => {
+                                        *bvalue = BindingValue::Vector3(attr.value(elem).try_into().expect("impossibru"));
+                                    }
+                                    i => {
+                                        panic!("attrib tuples of size {} are not yet supported in expressions", i);
+                                    }
+                                }
+                                
                             }
                             _ => { panic!("not yet unplemented!"); }
                         }
@@ -62,6 +74,7 @@ impl<'a> HoudiniGeoSchemaManipulator<'a> {
                     let val = evaluate_expression_precompiled_with_bindings(&precomp, &values).expect("failed to evaluate expression");
                     match val {
                         BindingValue::Float(f) => target_attr.set_value(elem, &[f]),
+                        BindingValue::Vector3(v) => target_attr.set_value(elem, &v.as_slice()[..target_attr.tuple_size()]),
                         _ => { panic!("only f64 attribs are supported in this prototype"); }
                     }
                 }

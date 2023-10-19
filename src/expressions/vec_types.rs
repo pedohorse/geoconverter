@@ -1,4 +1,4 @@
-use std::ops::{Add, Sub, Div, Mul, Index};
+use std::{ops::{Add, Sub, Div, Mul, Index}, array::TryFromSliceError};
 
 
 
@@ -6,6 +6,27 @@ use std::ops::{Add, Sub, Div, Mul, Index};
 pub struct Vector<T, const N: usize> {
     data: [T; N]
 }
+
+macro_rules! implSelf {
+    ($ftype:ty, $size:literal, $($x:ident),*) => {
+        impl Vector<$ftype, $size> {
+            pub fn new($($x: $ftype),*) -> Self {
+                Vector {
+                    data: [$($x),*]
+                }
+            }
+
+            pub fn as_slice(&self) -> &[$ftype] {
+                &self.data
+            }
+        }
+    };
+}
+
+// 3f64
+implSelf!(f64, 3, x, y, z);
+
+// iter trait
 
 macro_rules! implIndex {
     ($ftype:ty, $size:literal) => {
@@ -18,8 +39,10 @@ macro_rules! implIndex {
     };
 }
 
+// 3f64
 implIndex!(f64, 3);
 
+// operation traits
 
 macro_rules! implOp {
     ($opname:tt, $fname:tt, $ftype:ty, $size:literal, $op:tt) => {
@@ -37,6 +60,7 @@ macro_rules! implOp {
     };
 }
 
+// 3f64
 implOp!(Add, add, f64, 3, +);
 implOp!(Sub, sub, f64, 3, -);
 implOp!(Mul, mul, f64, 3, /);
@@ -59,7 +83,21 @@ macro_rules! implOpScalar {
     };
 }
 
+// 3f64
 implOpScalar!(Add, add, f64, 3, +, f64);
 implOpScalar!(Sub, sub, f64, 3, -, f64);
 implOpScalar!(Mul, mul, f64, 3, *, f64);
 implOpScalar!(Div, div, f64, 3, /, f64);
+
+// convertion
+
+// 3f64
+impl TryFrom<&[f64]> for Vector<f64, 3> {
+    type Error = TryFromSliceError;
+    fn try_from(value: &[f64]) -> Result<Self, Self::Error> {
+        match value.try_into() {
+            Ok(data) => Ok(Vector { data: data }),
+            Err(e) => Err(e)
+        }
+    }
+}
