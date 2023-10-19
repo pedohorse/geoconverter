@@ -1,5 +1,7 @@
+use geoconverter::expressions::precompile_expression;
+use geoconverter::houdini_geo_schema_manipulator::HoudiniGeoSchemaManipulator;
 use geoconverter::{create_stl_solid, parse, serialize_obj, serialize_stl, HoudiniGeoSchemaParser, ReaderElement};
-use std::env::{args, Args};
+use std::env::args;
 use std::fs::File;
 use std::io::{self, Write};
 
@@ -24,6 +26,7 @@ struct ArgumentOptions {
     convertion_type: ConvertionType,
     input_type: InputType,
     output_type: OutputType,
+    expression: Option<String>
 }
 
 const HELP_MESSAGE: &str = "
@@ -54,11 +57,42 @@ fn main() {
         }
     };
 
+    // if expression provided - try compiling it
+    let expr = if let Some(expr) = &options.expression {
+        // for now we only expect expressions in form of `@attribute = expression`
+        if !expr.starts_with("@") {
+            println!("for now only simple binding assignments are supported, like @foo=@bar*3+2, should start with @");
+            println!("but found: '{}'", expr);
+            std::process::exit(1);
+        }
+        
+        if let Some((first, second)) = expr.split_once("=") {
+            Some((&first[1..], precompile_expression(second)))
+        } else {
+            println!("for now only simple binding assignments are supported, like @foo=@bar*3+2, shoudl start with @<attr_name>=...");
+            println!("but found: '{}'", expr);
+            std::process::exit(1);
+        }
+    } else {
+        None
+    };
+
     // input parsing
     let res = parse(match options.input_type {
         InputType::File(ref mut x) => x,
         InputType::Stdin(ref mut x) => x,
     });
+
+    // processing
+    let res = if let Some((target_attr_name, precomp_expr)) = expr {
+        let mut manip = HoudiniGeoSchemaManipulator::new(&res);
+
+        manip.run_over_point_attributes_precompiled(&precomp_expr, target_attr_name);
+
+        manip.into_result()
+    } else {
+        res
+    };
 
     // output
     let out_ref: &mut dyn Write = match options.output_type {
@@ -84,6 +118,7 @@ fn main() {
 enum ExpectedFlag {
     NotExpecting,
     ExpectingType,
+    ExpectingExpression
 }
 
 struct ArgumentParsingError {
@@ -94,6 +129,7 @@ fn parse_arguments(argv: &mut dyn Iterator<Item = String>) -> Result<ArgumentOpt
     let mut convertion_type = ConvertionType::Obj;
     let mut input_type: Option<InputType> = None;
     let mut output_type: Option<OutputType> = None;
+    let mut expression: Option<String> = None;
     let mut flags = ExpectedFlag::NotExpecting;
     let mut stashed_path: Option<String> = None;
 
@@ -101,6 +137,9 @@ fn parse_arguments(argv: &mut dyn Iterator<Item = String>) -> Result<ArgumentOpt
         match (arg.as_str(), &flags) {
             ("-t", ExpectedFlag::NotExpecting) => {
                 flags = ExpectedFlag::ExpectingType;
+            }
+            ("-e", ExpectedFlag::NotExpecting) => {
+                flags = ExpectedFlag::ExpectingExpression;
             }
             (t, ExpectedFlag::ExpectingType) => {
                 flags = ExpectedFlag::NotExpecting;
@@ -116,6 +155,10 @@ fn parse_arguments(argv: &mut dyn Iterator<Item = String>) -> Result<ArgumentOpt
                         });
                     }
                 }
+            }
+            (exp, ExpectedFlag::ExpectingExpression) => {
+                flags = ExpectedFlag::NotExpecting;
+                expression = Some(exp.to_owned());
             }
             (file_path, ExpectedFlag::NotExpecting) => {
                 match &stashed_path {
@@ -151,6 +194,7 @@ fn parse_arguments(argv: &mut dyn Iterator<Item = String>) -> Result<ArgumentOpt
         convertion_type: convertion_type,
         input_type: input_type.expect("impossible!"),
         output_type: output_type.expect("impossible!"),
+        expression: expression
     })
 }
 
@@ -185,7 +229,7 @@ mod tests {
     impl TempFile {
         fn new(path: &'static str) -> TempFile {
             let mut file = File::create(path).expect("failed to create test file");
-            let n = file.write(path.as_bytes()).expect("failed to write to temp file");
+            file.write(path.as_bytes()).expect("failed to write to temp file");
             TempFile { path: path }
         }
     }
@@ -204,6 +248,7 @@ mod tests {
                 convertion_type: ConvertionType::Obj,
                 input_type: InputType::Stdin(_),
                 output_type: OutputType::Stdout(_),
+                expression: None
             }) => {
                 println!("check1 succ!");
             }
@@ -221,6 +266,7 @@ mod tests {
                 convertion_type: ConvertionType::Obj,
                 input_type: InputType::File(mut fi),
                 output_type: OutputType::File(mut fo),
+                expression: None
             }) => {
                 let mut buf = Vec::new();
                 fi.read_to_end(&mut buf).expect("failed to read from test input file");
@@ -241,6 +287,7 @@ mod tests {
                 convertion_type: ConvertionType::Obj,
                 input_type: InputType::Stdin(_),
                 output_type: OutputType::File(_),
+                expression: None
             }) => {
                 println!("check3 succ!");
             }
@@ -255,6 +302,7 @@ mod tests {
                 convertion_type: ConvertionType::Bgeo,
                 input_type: InputType::Stdin(_),
                 output_type: OutputType::File(_),
+                expression: None
             }) => {
                 println!("check4 succ!");
             }
@@ -269,6 +317,7 @@ mod tests {
                 convertion_type: ConvertionType::Geo,
                 input_type: InputType::Stdin(_),
                 output_type: OutputType::File(_),
+                expression: None
             }) => {
                 println!("check5 succ!");
             }
@@ -291,6 +340,7 @@ mod tests {
                 convertion_type: ConvertionType::Geo,
                 input_type: InputType::File(_),
                 output_type: OutputType::File(_),
+                expression: None
             }) => {
                 println!("check6 succ!");
             }

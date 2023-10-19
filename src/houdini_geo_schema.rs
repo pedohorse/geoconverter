@@ -1,6 +1,7 @@
 // So far it's a very limited parser, just enough for stl, but with slight thought of the future
 
 use std::collections::HashMap;
+use std::ops::Deref;
 
 use crate::convert_from_trait::ConvertFromAll;
 use crate::geo_struct::{ReaderElement, UniformArrayType, ReaderElementPointer};
@@ -968,23 +969,34 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                     panic!("bad schema! second attr block is not an array");
                 };
 
-                let mut i = 0;
+                let tuple_size = attr.tuple_size();
+                let rawpagedata = ReaderElement::UniformArray(UniformArrayType::UniformArrayTf64(attr.data));
+
+                let mut i: u32 = 0;
                 let mut block_iter = second_block.iter_mut();
                 let values = loop {
                     let elem = block_iter.next().expect("bad schema! values not found in attrib");
                     i += 1;  // ++ in the start, so next check is for %2==0 instead of ==1
                     if i % 2 == 0 { continue; };
-                    if let ReaderElement::Text(s) = elem {
-                        if s == "values" {
+                    match elem {
+                        ReaderElement::Text(s) if s == "values" => {
+                            // we can break only cuz we know that values always come last in schema
                             break block_iter.next().expect("bad schema! no values?");
                         }
-                    } else {
-                        panic!("bad schema! expecting string key");
+                        ReaderElement::Text(s) if s == "size" => {
+                            *block_iter.next().expect("bad schema! no size value") = ReaderElement::Int(tuple_size as i64);
+                            i += 1;
+                        }
+                        ReaderElement::Text(s) if s == "storage" => {
+                            *block_iter.next().expect("bad schema! no storage value") = ReaderElement::Text("fpreal64".to_owned());  // TODO: support different types
+                            i += 1;
+                        }
+                        ReaderElement::Text(_) => (),
+                        _ => {
+                            panic!("bad schema! expecting string key");
+                        }
                     }
                 };
-
-                let tuple_size = attr.tuple_size();
-                let rawpagedata = ReaderElement::UniformArray(UniformArrayType::UniformArrayTf64(attr.data));
 
                 *values = ReaderElement::Array(vec![
                     ReaderElement::Text("size".to_owned()), ReaderElement::Int(tuple_size as i64),

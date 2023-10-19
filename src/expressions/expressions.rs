@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::fmt;
+use super::vec_types::Vector;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Token {
     Binding(usize),
     IntValue(i64),
     FloatValue(f64),
+    VectorValue(Vector<f64, 3>),
     BracketOpen,
     BracketClose,
     BinaryPlus,
@@ -22,6 +24,7 @@ impl fmt::Display for Token {
             Token::Binding(x) => write!(f, "[bind@{}]", x),
             Token::IntValue(x) => write!(f, "[int value:{}]", x),
             Token::FloatValue(x) => write!(f, "[int value:{}]", x),
+            Token::VectorValue(x) => write!(f, "[vec value:{{{},{},{}}}]", x[0], x[1], x[2]),
             Token::BracketOpen => write!(f, "[(]"),
             Token::BracketClose => write!(f, "[)]"),
             Token::BinaryPlus => write!(f, "[binary+]"),
@@ -223,7 +226,7 @@ fn to_postfix(tokens_sequence: Vec<Token>) -> Result<Vec<Token>, Error> {
     for token in tokens_sequence {
         // println!("{:?} [[{:?}", token, stack);
         match token {
-            Token::IntValue(_) | Token::FloatValue(_) | Token::Binding(_) => result.push(token),
+            Token::IntValue(_) | Token::FloatValue(_) | Token::VectorValue(_) | Token::Binding(_) => result.push(token),
             Token::UnaryPlus | Token::UnaryMinus => stack.push(token),
             Token::BracketOpen => stack.push(Token::BracketOpen),
             Token::BracketClose => loop {
@@ -324,10 +327,13 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
                 let val2 = stack.pop();
                 let val1 = stack.pop();
 
+                let mut matched = false;
+
                 macro_rules! sum_helper {
                     ($opt1:tt, $opt2:tt, $res:tt, $rt1:ty, $rt2:ty) => {
                         match (val1, val2) {
                             (Some(Token::$opt1(x)), Some(Token::$opt2(y))) => {
+                                matched = true;
                                 stack.push(Token::$res(match token {
                                     Token::BinaryPlus => x as $rt1 + y as $rt2,
                                     Token::BinaryMinus => x as $rt1 - y as $rt2,
@@ -349,6 +355,14 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
                 sum_helper!(IntValue, FloatValue, FloatValue, f64, f64);
                 sum_helper!(FloatValue, IntValue, FloatValue, f64, f64);
                 sum_helper!(FloatValue, FloatValue, FloatValue, f64, f64);
+                sum_helper!(VectorValue, FloatValue, VectorValue, Vector<f64, 3>, f64);
+                sum_helper!(VectorValue, IntValue, VectorValue, Vector<f64, 3>, f64);
+
+                if !matched {
+                    return Err(Error {
+                        message: format!("cannot perform {:?} for types {:?} and {:?}", token, val1, val2)
+                    });
+                }
             }
             _ => panic!("there should not be brackets in polish postfix notaion. maybe use a special token type?"),
         }

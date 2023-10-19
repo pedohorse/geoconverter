@@ -1,8 +1,4 @@
-use std::borrow::BorrowMut;
-use std::collections::HashMap;
-use std::ops::Deref;
-
-use crate::expressions::{self, evaluate_expression_precompiled, PrecompiledCode, BindingValue, evaluate_expression_precompiled_with_bindings};
+use crate::expressions::{self, BindingValue, evaluate_expression_precompiled_with_bindings, PrecompiledCode};
 use crate::geo_struct::ReaderElement;
 use crate::houdini_geo_schema::{HoudiniGeoSchemaParser, GeoAttributeKind, GeoAttribute};
 
@@ -24,6 +20,11 @@ impl<'a> HoudiniGeoSchemaManipulator<'a> {
     }
 
     pub fn run_over_point_attributes(&mut self, expression: &str, target_attribute_name: &str) {
+        let precomp = expressions::precompile_expression(expression);
+        self.run_over_point_attributes_precompiled(&precomp, target_attribute_name);
+    }
+
+    pub fn run_over_point_attributes_precompiled(&mut self, precomp: &PrecompiledCode, target_attribute_name: &str) {
         self.schema_parser.parse_point_attributes();
 
         let target_attribute_kind = if let Some(x) = self.schema_parser.point_attribute(target_attribute_name) {
@@ -32,14 +33,12 @@ impl<'a> HoudiniGeoSchemaManipulator<'a> {
             panic!("no target point attribute '{}' found", target_attribute_name);
         };
 
-        let precomp = expressions::precompile_expression(expression);
-
         let mut values = precomp.clone_binding_values();
 
         // TODO: this is all a prototype placeholder for now
         let mut bind_attrs = Vec::new();
         for (bind_val, attr_name) in values.iter_mut().zip(precomp.binding_names()) {
-            if let Some(GeoAttributeKind::Float64(attr)) = self.schema_parser.point_attribute(attr_name) {
+            if let Some(attr) = self.schema_parser.point_attribute(attr_name) {
                 bind_attrs.push(attr);
             } else {
                 // panic for now, maybe TODO some defaults later
@@ -52,8 +51,13 @@ impl<'a> HoudiniGeoSchemaManipulator<'a> {
                 let mut target_attr = target_attr_source.clone();
 
                 for elem in 0..target_attr.len() {
-                    for (bvalue, attr) in values.iter_mut().zip(bind_attrs.iter()) {
-                        *bvalue = BindingValue::Float(attr.value(elem)[0]);
+                    for (bvalue, attr_kind) in values.iter_mut().zip(bind_attrs.iter()) {
+                        match attr_kind {
+                            GeoAttributeKind::Float64(attr) => {
+                                *bvalue = BindingValue::Float(attr.value(elem)[0]);
+                            }
+                            _ => { panic!("not yet unplemented!"); }
+                        }
                     }
                     let val = evaluate_expression_precompiled_with_bindings(&precomp, &values).expect("failed to evaluate expression");
                     match val {
