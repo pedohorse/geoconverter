@@ -422,7 +422,7 @@ pub fn evaluate_expression_precompiled(
     precomp: &PrecompiledCode,
     binding_value_map: &HashMap<String, BindingValue>,
 ) -> Result<BindingValue, Error> {
-    let mut bindings = precomp.binding_map_to_values(binding_value_map);
+    let bindings = precomp.binding_map_to_values(binding_value_map);
     evaluate_postfix(&precomp.postfix, &bindings)
 }
 

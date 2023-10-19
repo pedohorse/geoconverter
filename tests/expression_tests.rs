@@ -11,7 +11,7 @@ use geoconverter::{
 #[test]
 fn test_write_something() {
     let filepath = "tests/boxattr.bgeo";
-    let mut f = File::open(filepath).expect("failed to open test file");
+    let f = File::open(filepath).expect("failed to open test file");
     let geo_data = parse(&mut BufReader::new(f));
 
     let mut manip = houdini_geo_schema_manipulator::HoudiniGeoSchemaManipulator::new(&geo_data);

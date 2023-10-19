@@ -1,10 +1,13 @@
 // So far it's a very limited parser, just enough for stl, but with slight thought of the future
 
+use core::num;
 use std::collections::HashMap;
-use std::ops::Deref;
+use std::ops::{Deref, Range};
+use std::slice::ChunksExactMut;
+use std::thread::Scope;
 
 use crate::convert_from_trait::ConvertFromAll;
-use crate::geo_struct::{ReaderElement, UniformArrayType, ReaderElementPointer};
+use crate::geo_struct::{ReaderElement, ReaderElementPointer, UniformArrayType};
 
 pub struct HoudiniGeoSchemaParser<'a> {
     structure: &'a ReaderElement,
@@ -32,12 +35,20 @@ pub struct TokenGeoAttribute {
     path_to_element: ReaderElementPointer,
 }
 
+#[derive(Debug)]
+pub struct TupleGeoAttributeChunk<'a, T: Copy> {
+    tuple_size: usize,
+    data: &'a mut [T],
+    first: usize,
+}
+
 pub trait GeoAttribute<'a, T: ?Sized> {
-    fn tuple_size(&'a self) -> usize;
+    fn tuple_size(&self) -> usize;
     fn value(&'a self, number: usize) -> &'a T;
-    fn set_value(&'a mut self, number: usize, val: &T);
-    fn len(&'a self) -> usize;
+    fn set_value(&mut self, number: usize, val: &T);
+    fn len(&self) -> usize;
     fn original_structure_location(&'a self) -> &'a ReaderElementPointer;
+    fn get_element_numbers_range(&self) -> Range<usize>;
 }
 
 impl<'a, T: Copy> GeoAttribute<'a, [T]> for TupleGeoAttribute<T> {
@@ -45,20 +56,67 @@ impl<'a, T: Copy> GeoAttribute<'a, [T]> for TupleGeoAttribute<T> {
         &self.data[number * self.tuple_size..(number + 1) * self.tuple_size]
     }
 
-    fn set_value(&'a mut self, number: usize, val: &[T]) {
+    fn set_value(&mut self, number: usize, val: &[T]) {
         self.data[number * self.tuple_size..(number + 1) * self.tuple_size].copy_from_slice(val);
     }
 
-    fn tuple_size(&'a self) -> usize {
+    fn tuple_size(&self) -> usize {
         self.tuple_size
     }
 
-    fn len(&'a self) -> usize {
+    fn len(&self) -> usize {
         self.data.len() / self.tuple_size
     }
 
     fn original_structure_location(&'a self) -> &'a ReaderElementPointer {
         &self.path_to_element
+    }
+
+    fn get_element_numbers_range(&self) -> Range<usize> {
+        0..self.len()
+    }
+}
+
+impl<'a, T: Copy> GeoAttribute<'a, [T]> for TupleGeoAttributeChunk<'a, T> {
+    fn value(&'a self, number: usize) -> &'a [T] {
+        &self.data[number * self.tuple_size..(number + 1) * self.tuple_size]
+    }
+
+    fn set_value(&mut self, number: usize, val: &[T]) {
+        let number = number - self.first;
+        self.data[number * self.tuple_size..(number + 1) * self.tuple_size].copy_from_slice(val);
+    }
+
+    fn tuple_size(&self) -> usize {
+        self.tuple_size
+    }
+
+    fn len(&self) -> usize {
+        self.data.len() / self.tuple_size
+    }
+
+    fn original_structure_location(&'a self) -> &'a ReaderElementPointer {
+        panic!("TODO: remove this func from this trait");
+    }
+
+    fn get_element_numbers_range(&self) -> Range<usize> {
+        self.first..self.first+self.len()
+    }
+}
+
+impl<'b, 'a: 'b, T: Copy> TupleGeoAttribute<T> {
+    pub fn chunks_mut_scoped(&'a mut self, num_elements: usize) -> Vec<TupleGeoAttributeChunk<'b, T>> {// impl Iterator<Item = TupleGeoAttributeChunk<'b, T>> {
+        let tuple_size = self.tuple_size;
+        self.data
+            .chunks_mut(num_elements * self.tuple_size)
+            .enumerate()
+            .map(move |(i, chunk)| {
+                TupleGeoAttributeChunk::<'b, T> {
+                    tuple_size,
+                    data: chunk,
+                    first: i * num_elements,
+                }
+            }).collect()
     }
 }
 
@@ -68,20 +126,24 @@ impl<'a> GeoAttribute<'a, String> for TokenGeoAttribute {
         &self.tokens[shit]
     }
 
-    fn set_value(&'a mut self, number: usize, val: &String) {
+    fn set_value(&mut self, number: usize, val: &String) {
         panic!("not implemented yet!");
     }
 
-    fn tuple_size(&'a self) -> usize{
+    fn tuple_size(&self) -> usize {
         1
     }
 
-    fn len(&'a self) -> usize {
+    fn len(&self) -> usize {
         self.data.len()
     }
 
     fn original_structure_location(&'a self) -> &'a ReaderElementPointer {
         &self.path_to_element
+    }
+
+    fn get_element_numbers_range(&self) -> Range<usize> {
+        0..self.len()
     }
 }
 
@@ -138,12 +200,11 @@ fn get_from_any_kv_array<'a>(arr_elem: &'a ReaderElement, keys: &[&str]) -> Opti
 }
 
 impl<'a> HoudiniGeoSchemaParser<'a> {
-    
     /// construct new instance of HoudiniGeoSchemaParser
-    /// 
-    /// note that to access element attributes and primitives 
+    ///
+    /// note that to access element attributes and primitives
     /// you have to parse them beforehand explicitly
-    /// 
+    ///
     /// you should only parse what you need for particular geo conversion
     pub fn new(read_structure: &'a ReaderElement) -> HoudiniGeoSchemaParser<'a> {
         let indices = if let Some((topo, _)) = get_from_kv_array(read_structure, "topology") {
@@ -221,16 +282,16 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
     ///    "storage","fpreal32",
     ///    "tuples",[[0.5,-0.5,0.5],[-0.5,-0.5,0.5],[0.5,0.5,0.5],[-0.5,0.5,0.5],[-0.5,
     ///  ]
-    /// 
+    ///
     /// or it can be called "incides", but be very similar in structure:
     /// "indices",[
     ///    "size",1,
     ///    "storage","int32",
     ///    "arrays",[[0,0,0,0,0,0,0,0]]
     /// ]
-    /// 
+    ///
     /// or, mostly in bgeo case, it will have rawpagedata, see function below that deals with that
-    /// 
+    ///
     /// even if element is tuple, we still produce liear array here, an later will use tuple_size for proper indexing
     fn parse_values<T>(
         values: &ReaderElement,
@@ -338,7 +399,7 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
     }
 
     /// this function deals with rawpagedata
-    /// 
+    ///
     ///  typically it looks like this:
     /// "values", [
     ///    "size", 3,
@@ -347,9 +408,9 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
     ///    "pagesize", 1024,
     ///    "constantpageflags", [[]],
     ///    "rawpagedata", [0.5, -0.5, 0.5, -0.]
-    /// 
+    ///
     /// see details read minimal explanation here: https://www.sidefx.com/docs/hdk/_h_d_k__g_a__using.html#HDK_GA_FileFormat
-    /// 
+    ///
     /// raw_page_data must be from values. it's in args just to not get it twice
     fn parse_rawpagedata<T: Copy + Default + ConvertFromAll<K>, K: Copy>(
         values: &ReaderElement,
@@ -426,8 +487,8 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                             })
                             .collect(),
                         ReaderElement::UniformArray(UniformArrayType::UniformArrayTbool(vec)) => {
-                            vec.clone()  // TODO: this may be a reference instead, but then prev arm need to be rethought
-                        },
+                            vec.clone() // TODO: this may be a reference instead, but then prev arm need to be rethought
+                        }
                         _ => {
                             panic!("bad schema! element of constantpageflags is not an array")
                         }
@@ -489,7 +550,7 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
     }
 
     /// parse point attributes
-    /// 
+    ///
     pub fn parse_point_attributes(&mut self) {
         if let None = self._point_attributes {
             self._point_attributes = Self::parse_attributes(self.structure, "pointattributes", "pointcount");
@@ -497,7 +558,7 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
     }
 
     /// parse vertex attributes
-    /// 
+    ///
     pub fn parse_vertex_attributes(&mut self) {
         if let None = self._vertex_attributes {
             self._vertex_attributes = Self::parse_attributes(self.structure, "vertexattributes", "vertexcount");
@@ -505,7 +566,7 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
     }
 
     /// parse primitive attributes
-    /// 
+    ///
     pub fn parse_primitive_attributes(&mut self) {
         if let None = self._prim_attributes {
             self._prim_attributes = Self::parse_attributes(self.structure, "primitiveattributes", "primitivecount");
@@ -513,11 +574,11 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
     }
 
     /// parse general attribute structure
-    /// 
+    ///
     /// * `structure` - overall schema
     /// * `attrib_key` - name of the key where to find attributes
     /// * `elem_count_key` - key name of where to find element count
-    /// 
+    ///
     fn parse_attributes(
         structure: &'a ReaderElement,
         attrib_key: &str,
@@ -637,12 +698,13 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                         }
                     }
                     "string" => {
-                        let strings =
-                            if let Some((ReaderElement::Array(x), _)) = get_from_kv_array(&elem_attribute_block[1], "strings") {
-                                x
-                            } else {
-                                panic!("bad schema! no stirngs for string attrib!")
-                            };
+                        let strings = if let Some((ReaderElement::Array(x), _)) =
+                            get_from_kv_array(&elem_attribute_block[1], "strings")
+                        {
+                            x
+                        } else {
+                            panic!("bad schema! no stirngs for string attrib!")
+                        };
                         GeoAttributeKind::String(TokenGeoAttribute {
                             tokens: Vec::from_iter(strings.iter().map(|x| -> String {
                                 if let ReaderElement::Text(s) = x {
@@ -678,9 +740,9 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
     }
 
     /// parse primitives from geo structure
-    /// 
+    ///
     /// for now only polygons are supported
-    /// 
+    ///
     /// TODO: support other types of primitives
     pub fn parse_primitives(&mut self) {
         let mut polygons = Vec::with_capacity(self._prim_count);
@@ -919,13 +981,13 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
     }
 
     /// get point number of the point given vertex belongs to
-    /// 
+    ///
     pub fn vtx_to_ptnum(&self, vtx_num: usize) -> usize {
         self._vertex_nums_to_point_nums[vtx_num]
     }
 
     /// get polygons
-    /// 
+    ///
     /// primitives have to be parsed beforehand
     pub fn polygons(&self) -> &[GeoPolygon] {
         if let Some(p) = &self._polygons {
@@ -936,25 +998,25 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
     }
 
     /// get primitive count
-    /// 
+    ///
     pub fn primitive_count(&self) -> usize {
         self._prim_count
     }
 
     /// get point count
-    /// 
+    ///
     pub fn point_count(&self) -> usize {
         self._point_count
     }
 
     /// get vertex count
-    /// 
+    ///
     pub fn vertex_count(&self) -> usize {
         self._vertex_count
     }
 
     /// write attributes into a structure with the same layout as original
-    /// 
+    ///
     pub fn write_to_strucutre(attr_kind: GeoAttributeKind, structure: &mut ReaderElement) {
         match attr_kind {
             GeoAttributeKind::Float64(attr) => {
@@ -965,7 +1027,9 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                 };
                 // we know that this attrib_elem must be pointint to an array of 2 values
 
-                let second_block = if let ReaderElement::Array(x) = &mut attrib_elem_arr[1] { x } else {
+                let second_block = if let ReaderElement::Array(x) = &mut attrib_elem_arr[1] {
+                    x
+                } else {
                     panic!("bad schema! second attr block is not an array");
                 };
 
@@ -976,8 +1040,10 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                 let mut block_iter = second_block.iter_mut();
                 let values = loop {
                     let elem = block_iter.next().expect("bad schema! values not found in attrib");
-                    i += 1;  // ++ in the start, so next check is for %2==0 instead of ==1
-                    if i % 2 == 0 { continue; };
+                    i += 1; // ++ in the start, so next check is for %2==0 instead of ==1
+                    if i % 2 == 0 {
+                        continue;
+                    };
                     match elem {
                         ReaderElement::Text(s) if s == "values" => {
                             // we can break only cuz we know that values always come last in schema
@@ -988,7 +1054,8 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                             i += 1;
                         }
                         ReaderElement::Text(s) if s == "storage" => {
-                            *block_iter.next().expect("bad schema! no storage value") = ReaderElement::Text("fpreal64".to_owned());  // TODO: support different types
+                            *block_iter.next().expect("bad schema! no storage value") =
+                                ReaderElement::Text("fpreal64".to_owned()); // TODO: support different types
                             i += 1;
                         }
                         ReaderElement::Text(_) => (),
@@ -999,14 +1066,19 @@ impl<'a> HoudiniGeoSchemaParser<'a> {
                 };
 
                 *values = ReaderElement::Array(vec![
-                    ReaderElement::Text("size".to_owned()), ReaderElement::Int(tuple_size as i64),
-                    ReaderElement::Text("storage".to_owned()), ReaderElement::Text("fpreal64".to_owned()),  // TODO: support different types
-                    ReaderElement::Text("pagesize".to_owned()), ReaderElement::Int(1024),
-                    ReaderElement::Text("rawpagedata".to_owned()), rawpagedata
+                    ReaderElement::Text("size".to_owned()),
+                    ReaderElement::Int(tuple_size as i64),
+                    ReaderElement::Text("storage".to_owned()),
+                    ReaderElement::Text("fpreal64".to_owned()), // TODO: support different types
+                    ReaderElement::Text("pagesize".to_owned()),
+                    ReaderElement::Int(1024),
+                    ReaderElement::Text("rawpagedata".to_owned()),
+                    rawpagedata,
                 ]);
             }
-            _ => { panic!("not implemented yet"); }
+            _ => {
+                panic!("not implemented yet");
+            }
         }
-        
     }
 }
