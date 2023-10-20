@@ -19,7 +19,8 @@ pub enum Token {
     Multiply,
     Divide,
     VectorValue(Vector<f64, 3>),
-    MakeVec(usize)
+    MakeVec(usize),
+    VecIndex(usize),
 }
 
 impl fmt::Display for Token {
@@ -41,6 +42,7 @@ impl fmt::Display for Token {
             Token::Multiply => write!(f, "[*]"),
             Token::Divide => write!(f, "[/]"),
             Token::MakeVec(size) => write!(f, "[mkvec{}]", size),
+            Token::VecIndex(i) => write!(f, "[vindex.{}]", i),
         }
     }
 }
@@ -98,33 +100,62 @@ impl PrecompiledCode {
     }
 }
 
-pub struct Error {
+
+/// errors
+/// 
+
+#[derive(Debug)]
+pub enum ExpressionError {
+    CompilationError(CompilationError),
+    EvaluationError(EvaluationError),
+}
+
+pub struct CompilationError {
     message: String,
 }
 
-impl fmt::Display for Error {
+impl fmt::Display for CompilationError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Error: {}", self.message)
+        write!(f, "CompilationError: {}", self.message)
     }
 }
 
-impl fmt::Debug for Error {
+impl fmt::Debug for CompilationError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "<ERROR HAPPENED: {}>", self.message)
+        write!(f, "<COMPILATION ERROR HAPPENED: {}>", self.message)
     }
 }
 
-#[derive(Copy, Clone)]
+pub struct EvaluationError {
+    message: String,
+}
+
+impl fmt::Display for EvaluationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "EvaluationError: {}", self.message)
+    }
+}
+
+impl fmt::Debug for EvaluationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "<EVALUATION ERROR HAPPENED: {}>", self.message)
+    }
+}
+
+///
+
+#[derive(Debug, Copy, Clone)]
 enum ValueType {
     NotInitialized,
     Int,
     Float,
     Binding,
+    DotIndex,
 }
 
 /// parses human readable expression into a token array
 /// returns token vector, and a map of binding nums to binding names
-fn tokenize(line: &str) -> Result<(Vec<Token>, Vec<Binding>), Error> {
+fn tokenize(line: &str) -> Result<(Vec<Token>, Vec<Binding>), CompilationError> {
     let mut bindings = Vec::new();
 
     let mut line_tokens: Vec<Token> = Vec::new();
@@ -157,6 +188,19 @@ fn tokenize(line: &str) -> Result<(Vec<Token>, Vec<Binding>), Error> {
                     );
                     line_tokens.push(Token::Binding(bindings.len() - 1));
                 }
+                ValueType::DotIndex => {
+                    match &line[token_start..=token_end] {
+                        "x" => line_tokens.push(Token::VecIndex(0)),
+                        "y" => line_tokens.push(Token::VecIndex(1)),
+                        "z" => line_tokens.push(Token::VecIndex(2)),
+                        "w" => line_tokens.push(Token::VecIndex(3)),
+                        c => {
+                            return Err(CompilationError {
+                                message: format!("dot (.) index can only be one of x y z w, but '{}' found", c)
+                            })
+                        }
+                    }
+                }
                 ValueType::NotInitialized => {
                     // nothing, no token started
                 }
@@ -166,11 +210,15 @@ fn tokenize(line: &str) -> Result<(Vec<Token>, Vec<Binding>), Error> {
     }
 
     for (i, c) in line.trim().chars().enumerate() {
-        match (isval, c) {
-            (_, c) if c.is_ascii_whitespace() => {
+        match (isval, c, line_tokens.last()) {
+            (_, c, _) if c.is_ascii_whitespace() => {
                 finalize_token_if_started!();
             }
-            (ValueType::NotInitialized | ValueType::Float | ValueType::Int, '0'..='9' | '.') => {
+            (ValueType::NotInitialized, '.', Some(Token::Binding(_)) | Some(Token::CurlyClose) | Some(Token::BracketClose)) => {
+                token_start = i + 1;
+                isval = ValueType::DotIndex;
+            }
+            (ValueType::NotInitialized | ValueType::Float | ValueType::Int, '0'..='9' | '.', _) => {
                 match isval {
                     ValueType::NotInitialized => {
                         isval = if c == '.' { ValueType::Float } else { ValueType::Int };
@@ -183,14 +231,17 @@ fn tokenize(line: &str) -> Result<(Vec<Token>, Vec<Binding>), Error> {
                 }
                 token_end = i;
             }
-            (ValueType::NotInitialized, '@') => {
+            (ValueType::NotInitialized, '@', _) => {
                 isval = ValueType::Binding;
                 token_start = i + 1;
             }
-            (ValueType::Binding, c) if c.is_ascii_alphanumeric() => {
+            (ValueType::Binding, c, _) if c.is_ascii_alphanumeric() => {
                 token_end = i;
             }
-            (_, c) => {
+            (ValueType::DotIndex, c, _) if c.is_alphabetic() => {
+                token_end = i;
+            }
+            (_, c, _) => {
                 // first finalize any numeric token if any started
                 if let ValueType::NotInitialized = isval {
                 } else {
@@ -199,13 +250,13 @@ fn tokenize(line: &str) -> Result<(Vec<Token>, Vec<Binding>), Error> {
 
                 line_tokens.push(match c {
                     '+' => match line_tokens.last() {
-                        Some(Token::IntValue(_) | Token::FloatValue(_) | Token::Binding(_) | Token::BracketClose) => {
+                        Some(Token::IntValue(_) | Token::FloatValue(_) | Token::Binding(_) | Token::BracketClose | Token::CurlyClose | Token::VecIndex(_)) => {
                             Token::BinaryPlus
                         }
                         _ => Token::UnaryPlus,
                     },
                     '-' => match line_tokens.last() {
-                        Some(Token::IntValue(_) | Token::FloatValue(_) | Token::Binding(_) | Token::BracketClose) => {
+                        Some(Token::IntValue(_) | Token::FloatValue(_) | Token::Binding(_) | Token::BracketClose | Token::CurlyClose | Token::VecIndex(_)) => {
                             Token::BinaryMinus
                         }
                         _ => Token::UnaryMinus,
@@ -217,8 +268,13 @@ fn tokenize(line: &str) -> Result<(Vec<Token>, Vec<Binding>), Error> {
                     '{' => Token::CurlyOpen,
                     '}' => Token::CurlyClose,
                     ',' => Token::Comma,
+                    '.' => {
+                        token_start = i + 1;
+                        isval = ValueType::DotIndex;
+                        continue;
+                    }
                     _ => {
-                        return Err(Error {
+                        return Err(CompilationError {
                             message: format!("bad token symbol '{}'", c),
                         })
                     }
@@ -231,26 +287,26 @@ fn tokenize(line: &str) -> Result<(Vec<Token>, Vec<Binding>), Error> {
     Ok((line_tokens, bindings))
 }
 
-fn to_postfix(tokens_sequence: Vec<Token>) -> Result<Vec<Token>, Error> {
+fn to_postfix(tokens_sequence: Vec<Token>) -> Result<Vec<Token>, CompilationError> {
     let mut stack: Vec<Token> = Vec::new();
     let mut result: Vec<Token> = Vec::new();
     for token in tokens_sequence {
         // println!("{:?} [[{:?}", token, stack);
         match token {
-            Token::IntValue(_) | Token::FloatValue(_) | Token::VectorValue(_) | Token::Binding(_) => result.push(token),
+            Token::IntValue(_) | Token::FloatValue(_) | Token::VectorValue(_) | Token::Binding(_) | Token::VecIndex(_) => result.push(token),
             Token::UnaryPlus | Token::UnaryMinus => stack.push(token),
             Token::BracketOpen => stack.push(Token::BracketOpen),
             Token::BracketClose => loop {
                 match stack.pop() {
                     Some(Token::BracketOpen) => break,
                     Some(Token::CurlyOpen) => {
-                        return Err(Error {
+                        return Err(CompilationError {
                             message: format!("bracket mismatch, {{"),
                         })
                     }
                     Some(x) => result.push(x),
                     None => {
-                        return Err(Error {
+                        return Err(CompilationError {
                             message: format!("bracket mismatch!"),
                         })
                     }
@@ -282,7 +338,7 @@ fn to_postfix(tokens_sequence: Vec<Token>) -> Result<Vec<Token>, Error> {
                             break;
                         }
                         Some(Token::BracketOpen) => {
-                            return Err(Error {
+                            return Err(CompilationError {
                                 message: format!("bracket mismatch, ("),
                             })
                         }
@@ -291,7 +347,7 @@ fn to_postfix(tokens_sequence: Vec<Token>) -> Result<Vec<Token>, Error> {
                         }
                         Some(x) => result.push(x),
                         None => {
-                            return Err(Error {
+                            return Err(CompilationError {
                                 message: format!("curly bracket mismatch"),
                             })
                         }
@@ -340,7 +396,37 @@ fn to_postfix(tokens_sequence: Vec<Token>) -> Result<Vec<Token>, Error> {
 }
 
 ///
-fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>) -> Result<BindingValue, Error> {
+/// check syntax correctness
+fn validate_postfix(postfix_sequence: &Vec<Token>) -> Result<(), CompilationError> {
+    let mut stack_size: i64 = 0;
+    for token in postfix_sequence.iter() {
+        match token {
+            Token::IntValue(_) | Token::FloatValue(_) | Token::VectorValue(_) | Token::Binding(_) => stack_size += 1,
+            Token::UnaryMinus | Token::UnaryPlus | Token::VecIndex(_) => (),  // minus 1, put back 1
+            Token::BinaryMinus | Token::BinaryPlus | Token::Multiply | Token::Divide => stack_size -= 1,  // minus 2, put back 1
+            Token::MakeVec(x) => stack_size += -(*x as i64)+1,
+            x => {
+                return Err(CompilationError {
+                    message: format!("Unexpected token in postfix sequence: '{}'", x)
+                });
+            }
+        }
+        if stack_size <= 0 {
+            return Err(CompilationError {
+                message: format!("not enough operands for operation: '{}'", token)
+            });
+        }
+    }
+    if stack_size != 1 {
+        return Err(CompilationError {
+            message: format!("too many values in stack! {}", stack_size)
+        });
+    }
+    Ok(())
+}
+
+///
+fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>) -> Result<BindingValue, EvaluationError> {
     let mut stack: Vec<Token> = Vec::new();
     for token in postfix_sequence.iter() {
         match token {
@@ -351,24 +437,37 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
                     BindingValue::Float(x) => stack.push(Token::FloatValue(x)),
                     BindingValue::Int(x) => stack.push(Token::IntValue(x)),
                     BindingValue::Vector3(v) => stack.push(Token::VectorValue(v)),
-                    x @ BindingValue::Unknown => {
-                        return Err(Error {
+                    BindingValue::Unknown => {
+                        return Err(EvaluationError {
                             message: format!("binding {:?} is not set", b),
                             // TODO: error should provide binding num so that wrapping func may
                             //  present a better formed error message
                         });
                     }
-                    _ => {
-                        panic!("NOT IMPLEMENTED YET !!");
-                    }
                 }
+            }
+            Token::VecIndex(i) => {
+                match stack.pop() {
+                    Some(Token::VectorValue(v)) => stack.push(Token::FloatValue(v[*i])),
+                    Some(_) => {
+                        return Err(EvaluationError {
+                            message: format!("Only vector types support .x .y .z .w indexing"),
+                        })
+                    }
+                    _ => {
+                        return Err(EvaluationError {
+                            message: format!("bad postfix: misplaced unary plus"),
+                        })
+                    }
+                };
             }
             Token::UnaryPlus => {
                 match stack.pop() {
                     Some(Token::IntValue(x)) => stack.push(Token::IntValue(x)),
                     Some(Token::FloatValue(x)) => stack.push(Token::FloatValue(x)),
+                    Some(Token::VectorValue(x)) => stack.push(Token::VectorValue(x)),
                     _ => {
-                        return Err(Error {
+                        return Err(EvaluationError {
                             message: format!("bad postfix: misplaced unary plus"),
                         })
                     }
@@ -378,8 +477,9 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
                 match stack.pop() {
                     Some(Token::IntValue(x)) => stack.push(Token::IntValue(-x)),
                     Some(Token::FloatValue(x)) => stack.push(Token::FloatValue(-x)),
+                    Some(Token::VectorValue(x)) => stack.push(Token::VectorValue(x*-1.)),
                     x => {
-                        return Err(Error {
+                        return Err(EvaluationError {
                             message: format!("bad postfix: misplaced unary minus in front of {:?}", x),
                         })
                     }
@@ -422,7 +522,7 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
                             }
                         )*
                             (Some(x), Some(y)) => {
-                                return Err(Error {
+                                return Err(EvaluationError {
                                     message: format!(
                                         "bad expression: operation {} is not defined for arguments {} and {}",
                                         token,
@@ -432,7 +532,7 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
                                 })
                             },
                             _ => {
-                                return Err(Error {
+                                return Err(EvaluationError {
                                     message: format!("bad postfix: not enough operands for {}", token),
                                 })
                             }
@@ -445,14 +545,15 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
                     FloatValue, IntValue, FloatValue, f64, f64 |
                     FloatValue, FloatValue, FloatValue, f64, f64 |
                     VectorValue, FloatValue, VectorValue, Vector<f64, 3>, f64 |
-                    VectorValue, IntValue, VectorValue, Vector<f64, 3>, f64,
+                    VectorValue, IntValue, VectorValue, Vector<f64, 3>, f64 |
+                    VectorValue, VectorValue, VectorValue, Vector<f64, 3>, Vector<f64, 3>,
                     // now swapped arg ops
                     IntValue, VectorValue, VectorValue, f64, Vector<f64, 3> |
                     FloatValue, VectorValue, VectorValue, f64, Vector<f64, 3>
                 );
 
                 if !matched {
-                    return Err(Error {
+                    return Err(EvaluationError {
                         message: format!("cannot perform {:?} for types {:?} and {:?}", token, val1, val2)
                     });
                 }
@@ -464,12 +565,12 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
                             Some(Token::FloatValue(x)) => x,
                             Some(Token::IntValue(x)) => x as f64,
                             Some(x) => {
-                                return Err(Error {
+                                return Err(EvaluationError {
                                     message: format!("bad argument for operation: {:?}", x)
                                 }); 
                             }
                             None => {
-                                return Err(Error {
+                                return Err(EvaluationError {
                                     message: format!("insufficient arguments for operation")
                                 }); 
                             }
@@ -483,7 +584,7 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
                         let arg1 = poporelse!(stack);
                         stack.push(Token::VectorValue(Vector::new(arg1, arg2, arg3)));
                     }
-                    _ => { return Err(Error {
+                    _ => { return Err(EvaluationError {
                         message: format!("vectors of size {} are not supported", vec_size)
                     }); 
                 }
@@ -496,25 +597,29 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
         Some(Token::IntValue(x)) => Ok(BindingValue::Int(x)),
         Some(Token::FloatValue(x)) => Ok(BindingValue::Float(x)),
         Some(Token::VectorValue(x)) => Ok(BindingValue::Vector3(x)),
-        _ => Err(Error {
+        _ => Err(EvaluationError {
             message: format!("bad postfix: there should be a value, but there isn't"),
         }),
     }
 }
 
-pub fn precompile_expression(expression: &str) -> PrecompiledCode {
+pub fn precompile_expression(expression: &str) -> Result<PrecompiledCode, CompilationError> {
     // TODO: provide proper expression error messages
     let (tokenized, binds) = tokenize(expression).expect("error in expression");
-    PrecompiledCode {
-        postfix: to_postfix(tokenized).expect("expressin syntax error"),
-        bindings: binds        
+    let postfix = to_postfix(tokenized).expect("expressin syntax error");
+    if let Err(error) = validate_postfix(&postfix) {
+        return Err(error);
     }
+    Ok(PrecompiledCode {
+        postfix: postfix,
+        bindings: binds        
+    })
 }
 
 pub fn evaluate_expression_precompiled(
     precomp: &PrecompiledCode,
     binding_value_map: &HashMap<String, BindingValue>,
-) -> Result<BindingValue, Error> {
+) -> Result<BindingValue, EvaluationError> {
     let bindings = precomp.binding_map_to_values(binding_value_map);
     evaluate_postfix(&precomp.postfix, &bindings)
 }
@@ -522,13 +627,19 @@ pub fn evaluate_expression_precompiled(
 pub fn evaluate_expression_precompiled_with_bindings(
     precomp: &PrecompiledCode,
     bindings: &Vec<BindingValue>,
-) -> Result<BindingValue, Error> {
+) -> Result<BindingValue, EvaluationError> {
     evaluate_postfix(&precomp.postfix, bindings)
 }
 
-pub fn evaluate_expression(expression: &str, binding_value_map: &HashMap<String, BindingValue>) -> Result<BindingValue, Error> {
-    let precomp = precompile_expression(expression);
-    evaluate_expression_precompiled(&precomp, binding_value_map)
+pub fn evaluate_expression(expression: &str, binding_value_map: &HashMap<String, BindingValue>) -> Result<BindingValue, ExpressionError> {
+    let precomp = match precompile_expression(expression) {
+        Ok(x) => x,
+        Err(e) => { return Err(ExpressionError::CompilationError(e)); }
+    };
+    match evaluate_expression_precompiled(&precomp, binding_value_map) {
+        Ok(x) => Ok(x),
+        Err(e) => Err(ExpressionError::EvaluationError(e))
+    }
 }
 
 ///
@@ -560,6 +671,36 @@ mod tests {
         }}
     }
 
+    macro_rules! test_error_postfix {
+        ($expr:literal) => {
+            let (tokens, _) = tokenize($expr).expect("tokenization failed");
+            match to_postfix(tokens) {
+                Err(error) => { println!("Ok: {}", error); }
+                Ok(postfix) => { 
+                    let error = validate_postfix(&postfix).expect_err(&format!("valudation succeeded, that's a fail! {:?}", postfix));
+                    println!("OK: {}", error);
+                }
+            }  
+        };
+    }
+
+    macro_rules! test_succ_postfix {
+        ($expr:literal) => {
+            let (tokens, _) = tokenize($expr).expect("tokenization failed");
+            let postfix = to_postfix(tokens).expect(&format!("postfix failed {:?}", $expr));
+            validate_postfix(&postfix).expect(&format!("valudation failed {:?}", postfix));
+            println!("OK: {}", $expr);
+        };
+    }
+
+    macro_rules! test_expression_result {
+        ($expr:literal, $res:expr) => {
+            let precomp = precompile_expression($expr).expect("failed to 'compile'");
+            let result = evaluate_expression_precompiled_with_bindings(&precomp, &vec![]).expect("failed to evaluate");
+            assert_eq!($res, result);
+        };
+    }
+
     #[test]
     fn test_tokenize() {
         test_tokenization!(
@@ -586,6 +727,109 @@ mod tests {
             Token::FloatValue(5.5),
             Token::CurlyClose
         );
+
+        macro_rules! _test_similar1 {
+            ($expr:literal, $op:expr) => {
+                test_tokenization!(
+                    $expr,
+                    Token::CurlyOpen,
+                    Token::IntValue(1),
+                    Token::Comma,
+                    Token::IntValue(2),
+                    Token::Comma,
+                    Token::IntValue(3),
+                    Token::CurlyClose,
+                    $op,
+                    Token::CurlyOpen,
+                    Token::IntValue(2),
+                    Token::Comma,
+                    Token::IntValue(3),
+                    Token::Comma,
+                    Token::IntValue(4),
+                    Token::CurlyClose
+                );
+            };
+        }
+        _test_similar1!("{1,2,3}+{2,3,4}", Token::BinaryPlus);
+        _test_similar1!("{1,2,3}-{2,3,4}", Token::BinaryMinus);
+        _test_similar1!("{1,2,3}*{2,3,4}", Token::Multiply);
+        _test_similar1!("{1,2,3}/{2,3,4}", Token::Divide);
+        _test_similar1!("{1,2,3} +{2,3,4}", Token::BinaryPlus);
+        _test_similar1!("{1,2,3} -{2,3,4}", Token::BinaryMinus);
+        _test_similar1!("{1,2,3} *{2,3,4}", Token::Multiply);
+        _test_similar1!("{1,2,3} /{2,3,4}", Token::Divide);
+        _test_similar1!("{1,2,3}+ {2,3,4}", Token::BinaryPlus);
+        _test_similar1!("{1,2,3}- {2,3,4}", Token::BinaryMinus);
+        _test_similar1!("{1,2,3}* {2,3,4}", Token::Multiply);
+        _test_similar1!("{1,2,3}/ {2,3,4}", Token::Divide);
+        
+        test_tokenization!(
+            "}.x",
+            Token::CurlyClose,
+            Token::VecIndex(0)
+        );
+
+        test_tokenization!(
+            "@foo.y",
+            Token::Binding(0),
+            Token::VecIndex(1)
+        );
+
+        test_tokenization!(
+            "(2).y",
+            Token::BracketOpen,
+            Token::IntValue(2),
+            Token::BracketClose,
+            Token::VecIndex(1)
+        );
+
+        test_tokenization!(
+            ".2+.1",
+            Token::FloatValue(0.2),
+            Token::BinaryPlus,
+            Token::FloatValue(0.1)
+        );
+
+        test_tokenization!(
+            "-.2+.1",
+            Token::UnaryMinus,
+            Token::FloatValue(0.2),
+            Token::BinaryPlus,
+            Token::FloatValue(0.1)
+        );
+        test_tokenization!(
+            "-2.+1.",
+            Token::UnaryMinus,
+            Token::FloatValue(2.),
+            Token::BinaryPlus,
+            Token::FloatValue(1.)
+        );
+
+        test_tokenization!(
+            "1.2",
+            Token::FloatValue(1.2)
+        );
+
+        test_tokenization!(
+            "{1,2,3}.z + {1,2,3}.y",
+            Token::CurlyOpen,
+            Token::IntValue(1),
+            Token::Comma,
+            Token::IntValue(2),
+            Token::Comma,
+            Token::IntValue(3),
+            Token::CurlyClose,
+            Token::VecIndex(2),
+            Token::BinaryPlus,
+            Token::CurlyOpen,
+            Token::IntValue(1),
+            Token::Comma,
+            Token::IntValue(2),
+            Token::Comma,
+            Token::IntValue(3),
+            Token::CurlyClose,
+            Token::VecIndex(1)
+        );
     }
 
     #[test]
@@ -601,6 +845,7 @@ mod tests {
             Token::FloatValue(5.5),
             Token::MakeVec(3)
         );
+        validate_postfix(&postfix).expect(&format!("validation failed for {:?}", postfix));
 
         let (tokens, _) = tokenize("-11+{1+2, 2.1 + 3*(2+4)*2 ,  5.5-(1+3)*(4+5)}*9").expect("tokenization failed");
         let postfix = to_postfix(tokens).expect("postfix failed");
@@ -641,10 +886,68 @@ mod tests {
             Token::Multiply,
             Token::BinaryPlus
         );
+        validate_postfix(&postfix).expect(&format!("validation failed for {:?}", postfix));
+
     }
 
     #[test]
-    fn test_evaluate() {
+    fn test_postfix_fail() {
+        test_error_postfix!("1+");
+        test_error_postfix!("1*");
+        test_error_postfix!("1+*2");
+        test_error_postfix!("1+(2-");
+        test_error_postfix!("1+(2-)");
+        test_error_postfix!("1+((2-3)");
+        test_error_postfix!("1+(2-3))");
+        test_error_postfix!("*(1+(2-3)");
+        test_error_postfix!("1,2.1 ,5.5}");
+        test_error_postfix!("{{1,2.1 ,5.5}");
+        test_error_postfix!("1,2.1 ,5.5}");
+    }
+
+    #[test]
+    fn test_postfix_valid() {
+        test_succ_postfix!("1");
+        test_succ_postfix!("1+2");
+        test_succ_postfix!("1+(2)");
+        test_succ_postfix!("(1)+2");
+        test_succ_postfix!("@foo");
+        test_succ_postfix!("@foo*2");
+        test_succ_postfix!("-@foo");
+        test_succ_postfix!("1+@foo");
+        test_succ_postfix!("@foo+2");
+        test_succ_postfix!("@foo*@bar");
+        test_succ_postfix!("@foo+1*@bar");
+        test_succ_postfix!("{1,2,3}");
+        test_succ_postfix!("{1,2,3} + {2,3,4}");
+    }
+
+    #[test]
+    fn test_expressions() {
+        test_expression_result!("1+3", BindingValue::Int(4));
+        test_expression_result!("1.0+3", BindingValue::Float(4.));
+        test_expression_result!("1+3.0", BindingValue::Float(4.));
+        test_expression_result!("1.0+3.0", BindingValue::Float(4.));
+        test_expression_result!("{1.0, 2, 3} + {10, 20.0, 30.0}", BindingValue::Vector3(Vector::new(11., 22., 33.)));
+        test_expression_result!("{1.0, 2, 3} - {10, 20.0, 30.0}", BindingValue::Vector3(Vector::new(-9., -18., -27.)));
+        test_expression_result!("1 + {10, 20.0, 30.0}", BindingValue::Vector3(Vector::new(11., 21., 31.)));
+        test_expression_result!("{10, 20.0, 30.0}+1", BindingValue::Vector3(Vector::new(11., 21., 31.)));
+        test_expression_result!("{10, 20.0, 30.0}*2", BindingValue::Vector3(Vector::new(20., 40., 60.)));
+        test_expression_result!("{10, 20.0, 30.0}/2", BindingValue::Vector3(Vector::new(5., 10., 15.)));
+        test_expression_result!("{1+2*3, 5*(2-4), (1.0+5.5)*2}/2", BindingValue::Vector3(Vector::new(3.5, -5., 6.5)));
+        test_expression_result!("-{1,2,3}", BindingValue::Vector3(Vector::new(-1., -2., -3.)));
+        test_expression_result!("+{1,2,3}", BindingValue::Vector3(Vector::new(1., 2., 3.)));
+        test_expression_result!("{1,2,3}.x", BindingValue::Float(1.));
+        test_expression_result!("{1,2,3}.y", BindingValue::Float(2.));
+        test_expression_result!("{1,2,3}.z", BindingValue::Float(3.));
+        test_expression_result!("({1,2,3} + 5.5).x", BindingValue::Float(6.5));
+        test_expression_result!("({1,2,3} + 5.5).y", BindingValue::Float(7.5));
+        test_expression_result!("({1,2,3} + 5.5).z + (2*{1,2,3}).y", BindingValue::Float(12.5));
+        test_expression_result!("({1,2,3} + 5.5).z + {5,2,7}*{1,2,3}.y", BindingValue::Vector3(Vector::new(18.5, 12.5, 22.5)));
+    }
+
+    #[test]
+    fn test_evaluate() { // TODO: move this test into the prev one
         let (tokens, _) = tokenize("-11+{1+2, 2.1 + 3*(2+4)*2 ,  5.5-(1+3)*(4+5)}*9").expect("tokenization failed");
         let postfix = to_postfix(tokens).expect("postfix failed");
 

@@ -67,7 +67,11 @@ fn main() {
         }
         
         if let Some((first, second)) = expr.split_once("=") {
-            Some((first[1..].trim(), precompile_expression(second.trim())))
+            Some((first[1..].trim(), precompile_expression(second.trim()).unwrap_or_else(|err| {
+                println!("Expression error:");
+                println!("{}", err);
+                std::process::exit(1);
+            })))
         } else {
             println!("for now only simple binding assignments are supported, like @foo=@bar*3+2, shoudl start with @<attr_name>=...");
             println!("but found: '{}'", expr);

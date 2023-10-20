@@ -16,7 +16,7 @@ fn test_write_something() {
 
     let mut manip = houdini_geo_schema_manipulator::HoudiniGeoSchemaManipulator::new(&geo_data);
 
-    manip.run_over_point_attributes("@foo+100.29", "foo");
+    manip.run_over_point_attributes("@foo+100.29", "foo").expect("failed!!");
 
     let result_elem = manip.into_result();
 

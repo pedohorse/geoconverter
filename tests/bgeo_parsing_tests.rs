@@ -28,7 +28,7 @@ fn parse_box_helper(filepath: &str, parser: & dyn Fn(&mut dyn Read) -> ReaderEle
     //let mut f = File::open("/tmp/filea.bgeo").expect("failed to open test file");
     let elem = parser(&mut BufReader::new(&mut f));
 
-    geoconverter::geo_struct_serializer::preview(&elem);
+    // geoconverter::geo_struct_serializer::preview(&elem);
 
     if let ReaderElement::Array(root_arr) = &elem {
         if let ReaderElement::Text(x) = &root_arr[0] {

@@ -1,4 +1,7 @@
-use crate::expressions::{self, evaluate_expression_precompiled_with_bindings, BindingValue, PrecompiledCode};
+use crate::expressions::{
+    self, evaluate_expression_precompiled_with_bindings, BindingValue, CompilationError, EvaluationError, ExpressionError,
+    PrecompiledCode,
+};
 use crate::geo_struct::ReaderElement;
 use crate::houdini_geo_schema::{
     GeoAttribute, GeoAttributeKind, HoudiniGeoSchemaParser, TupleGeoAttribute, TupleGeoAttributeChunk,
@@ -23,9 +26,16 @@ impl<'a> HoudiniGeoSchemaManipulator<'a> {
         self.result_geo_data
     }
 
-    pub fn run_over_point_attributes(&mut self, expression: &str, target_attribute_name: &str) {
-        let precomp = expressions::precompile_expression(expression);
-        self.run_over_point_attributes_precompiled(&precomp, target_attribute_name);
+    pub fn run_over_point_attributes(&mut self, expression: &str, target_attribute_name: &str) -> Result<(), ExpressionError> {
+        let precomp = match expressions::precompile_expression(expression) {
+            Ok(x) => x,
+            Err(e) => {
+                return Err(ExpressionError::CompilationError(e));
+            }
+        };
+        match self.run_over_point_attributes_precompiled(&precomp, target_attribute_name) {
+            _ => Ok(())  // TODO: provide error reports from run_over_point_attributes_precompiled
+        }
     }
 
     pub fn run_over_point_attributes_precompiled(&mut self, precomp: &PrecompiledCode, target_attribute_name: &str) {
@@ -51,15 +61,15 @@ impl<'a> HoudiniGeoSchemaManipulator<'a> {
         match target_attribute_kind {
             GeoAttributeKind::Float64(target_attr_source) => {
                 let mut target_attr = target_attr_source.clone();
-                
-                let min_thread_chunk = 1024_usize;  // TODO: make a parameter !
+
+                let min_thread_chunk = 1024_usize; // TODO: make a parameter !
 
                 let max_threads: usize = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN).into();
 
                 // check if can and should multithread
                 if max_threads > 1 && target_attr.len() > min_thread_chunk {
                     let thread_count = max_threads.min(target_attr.len() / min_thread_chunk);
-                    let chunk_size = (target_attr.len() / thread_count).max(16);  // just sane min
+                    let chunk_size = (target_attr.len() / thread_count).max(16); // just sane min
 
                     let mut chunks = target_attr.chunks_mut_scoped(chunk_size);
 
@@ -96,21 +106,13 @@ impl<'a> HoudiniGeoSchemaManipulator<'a> {
 /// trait to help implement same function for several similar types
 ///
 trait RunOverF64Attribute<'b> {
-    fn run_over_f64(
-        precomp: &PrecompiledCode,
-        target_attr: &mut Self,
-        bind_attrs: &Vec<&GeoAttributeKind>,
-    );
+    fn run_over_f64(precomp: &PrecompiledCode, target_attr: &mut Self, bind_attrs: &Vec<&GeoAttributeKind>);
 }
 
 macro_rules! _helper_run_over_f64 {
     ($ftype:ty) => {
         impl<'b> RunOverF64Attribute<'b> for $ftype {
-            fn run_over_f64(
-                precomp: &PrecompiledCode,
-                target_attr: &mut $ftype,
-                bind_attrs: &Vec<&GeoAttributeKind>,
-            ) {
+            fn run_over_f64(precomp: &PrecompiledCode, target_attr: &mut $ftype, bind_attrs: &Vec<&GeoAttributeKind>) {
                 let mut values = precomp.clone_binding_values();
 
                 for elem in target_attr.get_element_numbers_range() {
