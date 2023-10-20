@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fmt;
+use std::{fmt, vec};
 use super::vec_types::Vector;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -7,15 +7,19 @@ pub enum Token {
     Binding(usize),
     IntValue(i64),
     FloatValue(f64),
-    VectorValue(Vector<f64, 3>),
     BracketOpen,
     BracketClose,
+    Comma,
+    CurlyOpen,
+    CurlyClose,
     BinaryPlus,
     UnaryPlus,
     BinaryMinus,
     UnaryMinus,
     Multiply,
     Divide,
+    VectorValue(Vector<f64, 3>),
+    MakeVec(usize)
 }
 
 impl fmt::Display for Token {
@@ -27,12 +31,16 @@ impl fmt::Display for Token {
             Token::VectorValue(x) => write!(f, "[vec value:{{{},{},{}}}]", x[0], x[1], x[2]),
             Token::BracketOpen => write!(f, "[(]"),
             Token::BracketClose => write!(f, "[)]"),
+            Token::Comma => write!(f, "[,]"),
+            Token::CurlyOpen => write!(f, "[{{]"),
+            Token::CurlyClose => write!(f, "[}}]"),
             Token::BinaryPlus => write!(f, "[binary+]"),
             Token::UnaryPlus => write!(f, "[unary+]"),
             Token::BinaryMinus => write!(f, "[binary-]"),
             Token::UnaryMinus => write!(f, "[unary-]"),
             Token::Multiply => write!(f, "[*]"),
             Token::Divide => write!(f, "[/]"),
+            Token::MakeVec(size) => write!(f, "[mkvec{}]", size),
         }
     }
 }
@@ -206,6 +214,9 @@ fn tokenize(line: &str) -> Result<(Vec<Token>, Vec<Binding>), Error> {
                     '/' => Token::Divide,
                     '(' => Token::BracketOpen,
                     ')' => Token::BracketClose,
+                    '{' => Token::CurlyOpen,
+                    '}' => Token::CurlyClose,
+                    ',' => Token::Comma,
                     _ => {
                         return Err(Error {
                             message: format!("bad token symbol '{}'", c),
@@ -232,6 +243,11 @@ fn to_postfix(tokens_sequence: Vec<Token>) -> Result<Vec<Token>, Error> {
             Token::BracketClose => loop {
                 match stack.pop() {
                     Some(Token::BracketOpen) => break,
+                    Some(Token::CurlyOpen) => {
+                        return Err(Error {
+                            message: format!("bracket mismatch, {{"),
+                        })
+                    }
                     Some(x) => result.push(x),
                     None => {
                         return Err(Error {
@@ -240,6 +256,48 @@ fn to_postfix(tokens_sequence: Vec<Token>) -> Result<Vec<Token>, Error> {
                     }
                 };
             },
+            Token::Comma => {
+                loop {
+                    match stack.last() {
+                        Some(Token::UnaryPlus)
+                        | Some(Token::UnaryMinus)
+                        | Some(Token::Multiply)
+                        | Some(Token::Divide)
+                        | Some(Token::BinaryPlus)
+                        | Some(Token::BinaryMinus) => {
+                            result.push(stack.pop().expect("this is imposibru"));
+                        }
+                        _ => break,
+                    };
+                }
+                stack.push(token)  // so that we count them after
+            }
+            Token::CurlyOpen => stack.push(token),
+            Token::CurlyClose => {
+                let mut elem_count = 1;
+                loop {
+                    match stack.pop() {
+                        Some(Token::CurlyOpen) => {
+                            result.push(Token::MakeVec(elem_count));
+                            break;
+                        }
+                        Some(Token::BracketOpen) => {
+                            return Err(Error {
+                                message: format!("bracket mismatch, ("),
+                            })
+                        }
+                        Some(Token::Comma) => {
+                            elem_count += 1;
+                        }
+                        Some(x) => result.push(x),
+                        None => {
+                            return Err(Error {
+                                message: format!("curly bracket mismatch"),
+                            })
+                        }
+                    }
+                }
+            }
             Token::BinaryPlus | Token::BinaryMinus => {
                 loop {
                     match stack.last() {
@@ -266,6 +324,9 @@ fn to_postfix(tokens_sequence: Vec<Token>) -> Result<Vec<Token>, Error> {
                     };
                 }
                 stack.push(token);
+            }
+            _ => {
+                panic!("TODO: tokens should be split, some are not supposed to happen at this stage")
             }
         }
     }
@@ -396,6 +457,38 @@ fn evaluate_postfix(postfix_sequence: &Vec<Token>, bindings: &Vec<BindingValue>)
                     });
                 }
             }
+            Token::MakeVec(vec_size) => {
+                macro_rules! poporelse {
+                    ($stack:ident) => {
+                        match $stack.pop() {
+                            Some(Token::FloatValue(x)) => x,
+                            Some(Token::IntValue(x)) => x as f64,
+                            Some(x) => {
+                                return Err(Error {
+                                    message: format!("bad argument for operation: {:?}", x)
+                                }); 
+                            }
+                            None => {
+                                return Err(Error {
+                                    message: format!("insufficient arguments for operation")
+                                }); 
+                            }
+                        }
+                    };
+                }
+                match vec_size {
+                    3 => {
+                        let arg3 = poporelse!(stack);
+                        let arg2 = poporelse!(stack);
+                        let arg1 = poporelse!(stack);
+                        stack.push(Token::VectorValue(Vector::new(arg1, arg2, arg3)));
+                    }
+                    _ => { return Err(Error {
+                        message: format!("vectors of size {} are not supported", vec_size)
+                    }); 
+                }
+                }
+            }
             _ => panic!("there should not be brackets in polish postfix notaion. maybe use a special token type?"),
         }
     }
@@ -438,34 +531,138 @@ pub fn evaluate_expression(expression: &str, binding_value_map: &HashMap<String,
     evaluate_expression_precompiled(&precomp, binding_value_map)
 }
 
+///
 /// --------------------------------------------------
 ///                       TESTS
 /// --------------------------------------------------
+/// 
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    macro_rules! compare_tokens {
+        ($test:expr, $($token:expr),*) => {{
+            let expected = vec![$($token),*];
+            assert_eq!($test.len(), expected.len());
+            for (i, (tok_act, tok_exp)) in $test.iter().zip(&expected).enumerate() {
+                assert_eq!(*tok_act, *tok_exp, "tokens mismatch at num {}", i);
+            };
+        }};
+    }
+
+    macro_rules! test_tokenization {
+        ($expr:literal, $($token:expr),*) => {{
+            let (tokenized, bindings) = tokenize($expr).expect("tokenization failed");
+            
+            compare_tokens!(tokenized, $($token),*);
+            (tokenized, bindings)
+        }}
+    }
+
+    #[test]
+    fn test_tokenize() {
+        test_tokenization!(
+            "1 +  2",
+            Token::IntValue(1),
+            Token::BinaryPlus,
+            Token::IntValue(2)
+        );
+
+        test_tokenization!(
+            "1.1   -  2.4",
+            Token::FloatValue(1.1),
+            Token::BinaryMinus,
+            Token::FloatValue(2.4)
+        );
+
+        test_tokenization!(
+            "{1, 2.1 ,  5.5}",
+            Token::CurlyOpen,
+            Token::IntValue(1),
+            Token::Comma,
+            Token::FloatValue(2.1),
+            Token::Comma,
+            Token::FloatValue(5.5),
+            Token::CurlyClose
+        );
+    }
+
+    #[test]
+    fn test_postfix() {
+        let (tokens, _) = tokenize("{1, 2.1 ,  5.5}").expect("tokenization failed");
+        let postfix = to_postfix(tokens).expect("postfix failed");
+        
+        println!("{:?}", postfix);
+        compare_tokens!(
+            postfix,
+            Token::IntValue(1),
+            Token::FloatValue(2.1),
+            Token::FloatValue(5.5),
+            Token::MakeVec(3)
+        );
+
+        let (tokens, _) = tokenize("-11+{1+2, 2.1 + 3*(2+4)*2 ,  5.5-(1+3)*(4+5)}*9").expect("tokenization failed");
+        let postfix = to_postfix(tokens).expect("postfix failed");
+        
+        println!("{:?}", postfix);
+        compare_tokens!(
+            postfix,
+            Token::IntValue(11),
+            Token::UnaryMinus,
+
+            Token::IntValue(1),
+            Token::IntValue(2),
+            Token::BinaryPlus,
+
+            Token::FloatValue(2.1),
+            Token::IntValue(3),
+            Token::IntValue(2),
+            Token::IntValue(4),
+            Token::BinaryPlus,
+            Token::Multiply,
+            Token::IntValue(2),
+            Token::Multiply,
+            Token::BinaryPlus,
+
+            Token::FloatValue(5.5),
+            Token::IntValue(1),
+            Token::IntValue(3),
+            Token::BinaryPlus,
+            Token::IntValue(4),
+            Token::IntValue(5),
+            Token::BinaryPlus,
+            Token::Multiply,
+            Token::BinaryMinus,
+
+            Token::MakeVec(3),
+
+            Token::IntValue(9),
+            Token::Multiply,
+            Token::BinaryPlus
+        );
+    }
+
+    #[test]
+    fn test_evaluate() {
+        let (tokens, _) = tokenize("-11+{1+2, 2.1 + 3*(2+4)*2 ,  5.5-(1+3)*(4+5)}*9").expect("tokenization failed");
+        let postfix = to_postfix(tokens).expect("postfix failed");
+
+        let value = evaluate_postfix(&postfix, &vec![]).expect("failed to evaluate");
+
+        assert_eq!(BindingValue::Vector3(Vector::new(16., -11.+(2.1+3.*(2.+4.)*2.)*9., -285.5)), value);
+    }
+
     #[test]
     fn test_parsing_simplest() {
-        let expr = "5+33.33*22";
-        let (tokenized, bindings) = tokenize(expr).expect("tokenization failed");
-
-        {
-            // check 1
-            println!("{:?}", tokenized);
-            let expected = vec![
-                Token::IntValue(5),
-                Token::BinaryPlus,
-                Token::FloatValue(33.33),
-                Token::Multiply,
-                Token::IntValue(22),
-            ];
-            assert_eq!(tokenized.len(), expected.len());
-            for (i, (tok_act, tok_exp)) in tokenized.iter().zip(&expected).enumerate() {
-                assert_eq!(*tok_act, *tok_exp, "tokens mismatch at num {}", i);
-            }
-        }
+        let (tokenized, _) = test_tokenization!(
+            "5+33.33*22",
+            Token::IntValue(5),
+            Token::BinaryPlus,
+            Token::FloatValue(33.33),
+            Token::Multiply,
+            Token::IntValue(22)
+        );
 
         let postfix = to_postfix(tokenized).expect("postfix failed");
         {
@@ -490,34 +687,25 @@ mod tests {
             assert_eq!(result, BindingValue::Float(738.26));
         }
     }
-
+    
     #[test]
     fn test_parsing_variables() {
-        let expr = "-2*(3.4+@a)-91*@bc";
-        let (tokenized, bindings) = tokenize(expr).expect("tokenization failed");
-
-        {
-            // check 1
-            println!("{:?}", tokenized);
-            let expected = vec![
-                Token::UnaryMinus,
-                Token::IntValue(2),
-                Token::Multiply,
-                Token::BracketOpen,
-                Token::FloatValue(3.4),
-                Token::BinaryPlus,
-                Token::Binding(0),
-                Token::BracketClose,
-                Token::BinaryMinus,
-                Token::IntValue(91),
-                Token::Multiply,
-                Token::Binding(1),
-            ];
-            assert_eq!(tokenized.len(), expected.len());
-            for (i, (tok_act, tok_exp)) in tokenized.iter().zip(&expected).enumerate() {
-                assert_eq!(*tok_act, *tok_exp, "tokens mismatch at num {}", i);
-            }
-        }
+        let (tokenized, bindings) = test_tokenization!(
+            "-2*(3.4+@a)-91*@bc",
+            Token::UnaryMinus,
+            Token::IntValue(2),
+            Token::Multiply,
+            Token::BracketOpen,
+            Token::FloatValue(3.4),
+            Token::BinaryPlus,
+            Token::Binding(0),
+            Token::BracketClose,
+            Token::BinaryMinus,
+            Token::IntValue(91),
+            Token::Multiply,
+            Token::Binding(1)
+        );
+          
 
         let postfix = to_postfix(tokenized).expect("postfix failed");
         {
