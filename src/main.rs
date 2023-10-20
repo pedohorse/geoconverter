@@ -67,7 +67,7 @@ fn main() {
         }
         
         if let Some((first, second)) = expr.split_once("=") {
-            Some((&first[1..], precompile_expression(second)))
+            Some((first[1..].trim(), precompile_expression(second.trim())))
         } else {
             println!("for now only simple binding assignments are supported, like @foo=@bar*3+2, shoudl start with @<attr_name>=...");
             println!("but found: '{}'", expr);
