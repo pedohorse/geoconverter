@@ -18,7 +18,32 @@ Or specified as a file, like
 
 (if `-t` is not provided - assumed output format is `obj`)
 
-supported output formats:
+
+#### Note on bgeo.sc, bgeo.gz
+
+Formats `bgeo.sc`, `bgeo.gz` are simple bgeos, but additionally compressed with c-blosc and gzip correspondingly.
+
+To convert them with this tool you need to first pipe the `bgeo.sc` file through a blosc decompressing tool into geoconverter
+
+#### Expressions
+
+You can run simple expressions over attributes (just float/vector point attributes for now).
+
+Syntax is somewhat inspired by vex, but **it's not vex by any means**.  
+There are no functions for now, and the "language" is just interpreted postfix notation, nothing is truly compiled.  
+There are also no built-in functions, for now at least.
+
+for example:
+* `@P = @P + 0.5*@mask*@N` will add offset along normal `N` to `P` based on mask attribute `mask`. All attributes MUST exist beforehand in the cache file.
+* `@P=@P + {0,1,0}*@mask` will offset `P` along vertical axis, multiplied by `mask` attribute
+* `@mask=(@P.z+1)/2` will set `mask` to be that value evaluated from z component of `P`
+
+Full command line example would look like this
+```shell
+geoconverter -t bgeo -e "@P = @P + 0.5*@mask*@N" file_in.bgeo file_out.bgeo
+```
+
+### supported output formats:
 * [x] obj
 * [x] stl
 * [x] geo
