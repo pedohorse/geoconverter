@@ -18,6 +18,7 @@ Or specified as a file, like
 
 (if `-t` is not provided - assumed output format is `obj`)
 
+
 #### Note on bgeo.sc, bgeo.gz
 
 Formats `bgeo.sc`, `bgeo.gz` are simple bgeos, but additionally compressed with c-blosc and gzip correspondingly.
@@ -42,7 +43,7 @@ Full command line example would look like this
 geoconverter -t bgeo -e "@P = @P + 0.5*@mask*@N" file_in.bgeo file_out.bgeo
 ```
 
-supported output formats:
+### supported output formats:
 * [x] obj
 * [x] stl
 * [x] geo
