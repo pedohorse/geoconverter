@@ -1,7 +1,10 @@
+use geoconverter::expressions::precompile_expression;
+use geoconverter::houdini_geo_schema_manipulator::HoudiniGeoSchemaManipulator;
 use geoconverter::{create_stl_solid, parse, serialize_obj, serialize_stl, HoudiniGeoSchemaParser, ReaderElement};
 use std::env::args;
 use std::fs::File;
 use std::io::{self, Write};
+use std::time::Instant;
 
 enum ConvertionType {
     Obj,
@@ -20,10 +23,30 @@ enum OutputType {
     File(io::BufWriter<File>),
 }
 
+pub enum VerbocityLevel {
+    Silent,
+    Verbose
+}
+
+struct ArgumentOptions {
+    convertion_type: ConvertionType,
+    input_type: InputType,
+    output_type: OutputType,
+    expression: Option<String>,
+    verbocity: VerbocityLevel,
+    just_print_help: bool,
+}
+
 const HELP_MESSAGE: &str = "
-usage: geoconverter [-t type] [input_file] [output_file]
+usage: geoconverter [-h] [-v] [e expression] [-t type] [input_file] [output_file]
     
-    -t type (default=obj)
+    -t type (default=obj)   Type of output file, available types are obj,stl,geo,bgeo
+    -e expression           Expression to run over a point attribute. 
+                            It should have a form of '@attr = expression', where 'attr' is some
+                            existing point attribute on geometry, 
+                            expression may have bindings to other attributes using '@otherattr' syntax
+    -v                      Print some verbose info to stderr
+    -h                      Print this help message and exit, other args are ignored
 
 If last 2 arguments are file paths - 
   first is interpreted as input file path,
@@ -37,73 +60,89 @@ If NO file paths provided -
 
 fn main() {
     let mut argv = args();
-    // TODO: this argument parsing started out fine, but now got bloated and confusing.
-    // If a single more arg is added - refactor this all shit
-    // Do a struct with input parsing options, let one arg parsing function return it
+    argv.next().expect("zero argument not provided? unexpected");
 
-    let arg1 = argv.nth(1);
-
-    let (converion_type, file_path) = match arg1 {
-        Some(t) if t == "--help" => {
-            // print usage and exit
-            println!("{}", HELP_MESSAGE);
-            std::process::exit(2)
+    let mut options = match parse_arguments(&mut argv) {
+        Ok(x) => x,
+        Err(e) => {
+            println!("Error parsing arguments: {}\n\n", e.ohnoo);
+            print!("{}", HELP_MESSAGE);
+            std::process::exit(2);
         }
-        Some(t) if t == "-t" => {
-            let arg2 = argv.next();
-            let file_path = argv.next().unwrap_or_else(|| "".to_owned());
-            match arg2.as_deref() {
-                Some("obj") => (ConvertionType::Obj, file_path),
-                Some("stl") => (ConvertionType::Stl, file_path),
-                Some("geo") | Some("json") => (ConvertionType::Geo, file_path),
-                Some("bgeo") => (ConvertionType::Bgeo, file_path),
-                Some(s) => {
-                    println!("wtf is type {}?", s);
-                    std::process::exit(1);
-                }
-                _ => {
-                    println!("type not provided");
-                    std::process::exit(1);
-                }
+    };
+
+    if options.just_print_help {
+        print!("{}", HELP_MESSAGE);
+        std::process::exit(0);
+    }
+
+    let mut benchmark;
+    
+
+    macro_rules! log{
+        ($template:literal $(, $($arg:expr),*)?) => {
+            if let VerbocityLevel::Verbose = options.verbocity {
+                eprintln!($template, benchmark.elapsed().as_secs_f32(), $($arg),*);
             }
         }
-        Some(s) => (ConvertionType::Obj, s),
-        _ => (ConvertionType::Obj, "".to_owned()),
+    }
+
+    // if expression provided - try compiling it
+    let expr = if let Some(expr) = &options.expression {
+        // for now we only expect expressions in form of `@attribute = expression`
+        if !expr.starts_with("@") {
+            println!("for now only simple binding assignments are supported, like @foo=@bar*3+2, should start with @");
+            println!("but found: '{}'", expr);
+            std::process::exit(1);
+        }
+        
+        if let Some((first, second)) = expr.split_once("=") {
+            Some((first[1..].trim(), precompile_expression(second.trim()).unwrap_or_else(|err| {
+                println!("Expression error:");
+                println!("{}", err);
+                std::process::exit(1);
+            })))
+        } else {
+            println!("for now only simple binding assignments are supported, like @foo=@bar*3+2, shoudl start with @<attr_name>=...");
+            println!("but found: '{}'", expr);
+            std::process::exit(1);
+        }
+    } else {
+        None
     };
 
-    let (mut in_file, mut out_file) = if let Some(another_file_path) = argv.next() {
-        (
-            InputType::File(io::BufReader::new(File::open(file_path).expect("failed to open input file"))),
-            OutputType::File(io::BufWriter::new(
-                File::create(another_file_path).expect("could not create output file"),
-            )),
-        )
-    } else {
-        (
-            InputType::Stdin(io::stdin().lock()),
-            if file_path == "" {
-                OutputType::Stdout(io::stdout().lock())
-            } else {
-                OutputType::File(io::BufWriter::new(
-                    File::create(file_path).expect("could not create output file"),
-                ))
-            },
-        )
-    };
+    benchmark = Instant::now();
 
     // input parsing
-    let res = parse(match in_file {
+    let res = parse(match options.input_type {
         InputType::File(ref mut x) => x,
         InputType::Stdin(ref mut x) => x,
     });
+    log!("input read took {}s");
+
+    // processing
+    let res = if let Some((target_attr_name, precomp_expr)) = expr {
+        let mut manip = HoudiniGeoSchemaManipulator::new(&res);
+        
+        benchmark = Instant::now();
+        manip.run_over_point_attributes_precompiled(&precomp_expr, target_attr_name);
+        log!("processing took {}s");
+
+        manip.into_result()
+    } else {
+        res
+    };
 
     // output
-    let out_ref: &mut dyn Write = match out_file {
+    let out_ref: &mut dyn Write = match options.output_type {
         OutputType::Stdout(ref mut f) => f,
         OutputType::File(ref mut f) => f,
     };
 
-    match converion_type {
+    benchmark = Instant::now();
+
+    // convertion
+    match options.convertion_type {
         ConvertionType::Obj => convert_to_obj(&res, out_ref),
         ConvertionType::Stl => convert_to_stl(&res, out_ref),
         ConvertionType::Geo => geoconverter::geo_struct_serializer::to_json(&res, out_ref),
@@ -111,10 +150,105 @@ fn main() {
     }
 
     // don't forget to flush (but does it matter in the end of the program?)
-    match out_file {
+    match options.output_type {
         OutputType::File(ref mut file) => file.flush().expect("failed to flush the file"),
         OutputType::Stdout(ref mut file) => file.flush().expect("failed to flush stdout"),
     }
+    log!("convertion and write took {}s");
+}
+
+enum ExpectedFlag {
+    NotExpecting,
+    ExpectingType,
+    ExpectingExpression
+}
+
+struct ArgumentParsingError {
+    ohnoo: String,
+}
+
+fn parse_arguments(argv: &mut dyn Iterator<Item = String>) -> Result<ArgumentOptions, ArgumentParsingError> {
+    let mut convertion_type = ConvertionType::Obj;
+    let mut input_type: Option<InputType> = None;
+    let mut output_type: Option<OutputType> = None;
+    let mut expression: Option<String> = None;
+    let mut flags = ExpectedFlag::NotExpecting;
+    let mut stashed_path: Option<String> = None;
+    let mut verbocity = VerbocityLevel::Silent;
+    let mut just_print_help = false;
+
+    for arg in argv {
+        match (arg.as_str(), &flags) {
+            ("-h", ExpectedFlag::NotExpecting) => {
+                just_print_help = true;
+                break; // we don't care about other args now
+            }
+            ("-v", ExpectedFlag::NotExpecting) => {
+                verbocity = VerbocityLevel::Verbose;
+            }
+            ("-t", ExpectedFlag::NotExpecting) => {
+                flags = ExpectedFlag::ExpectingType;
+            }
+            ("-e", ExpectedFlag::NotExpecting) => {
+                flags = ExpectedFlag::ExpectingExpression;
+            }
+            (t, ExpectedFlag::ExpectingType) => {
+                flags = ExpectedFlag::NotExpecting;
+                convertion_type = match t {
+                    "obj" => ConvertionType::Obj,
+                    "stl" => ConvertionType::Stl,
+                    "geo" | "json" => ConvertionType::Geo,
+                    "bgeo" => ConvertionType::Bgeo,
+                    s => {
+                        println!("wtf is type {}?", s);
+                        return Err(ArgumentParsingError {
+                            ohnoo: format!("unknown type '{}'", s),
+                        });
+                    }
+                }
+            }
+            (exp, ExpectedFlag::ExpectingExpression) => {
+                flags = ExpectedFlag::NotExpecting;
+                expression = Some(exp.to_owned());
+            }
+            (file_path, ExpectedFlag::NotExpecting) => {
+                match &stashed_path {
+                    None => {
+                        stashed_path = Some(arg);
+                    }
+                    Some(input_path) => {  // else it's the second positional argument, so we are ready to assign
+                        input_type = Some(InputType::File(io::BufReader::new(
+                            File::open(input_path).expect("failed to open input file"),
+                        )));
+                        output_type = Some(OutputType::File(io::BufWriter::new(
+                            File::create(file_path).expect("could not create output file"),
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    if let None = output_type {
+        if let Some(file_path) = stashed_path {
+            output_type = Some(OutputType::File(io::BufWriter::new(
+                File::create(file_path).expect("could not create output file")
+            )));
+        } else {
+            output_type = Some(OutputType::Stdout(io::stdout().lock()));
+        }
+    }
+    if let None = input_type {
+        input_type = Some(InputType::Stdin(io::stdin().lock()));
+    };
+
+    Ok(ArgumentOptions {
+        convertion_type,
+        input_type: input_type.expect("impossible!"),
+        output_type: output_type.expect("impossible!"),
+        expression,
+        verbocity,
+        just_print_help
+    })
 }
 
 fn convert_to_stl(res: &ReaderElement, out: &mut dyn io::Write) {
@@ -127,4 +261,157 @@ fn convert_to_obj(res: &ReaderElement, out: &mut dyn io::Write) {
     let mut schema_parser = HoudiniGeoSchemaParser::new(res);
 
     serialize_obj(&mut schema_parser, out);
+}
+
+///
+/// --------------------------------------------------------------
+///                            TESTS
+/// --------------------------------------------------------------
+///
+
+#[cfg(test)]
+mod tests {
+    use std::io::Read;
+
+    use super::*;
+
+    struct TempFile {
+        path: &'static str,
+    }
+
+    impl TempFile {
+        fn new(path: &'static str) -> TempFile {
+            let mut file = File::create(path).expect("failed to create test file");
+            file.write(path.as_bytes()).expect("failed to write to temp file");
+            TempFile { path: path }
+        }
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            std::fs::remove_file(self.path).expect("failed to remove temporary file!");
+        }
+    }
+
+    #[test]
+    fn argparser_simple() {
+        // check1
+        match parse_arguments(&mut vec![].into_iter()) {
+            Ok(ArgumentOptions {
+                convertion_type: ConvertionType::Obj,
+                input_type: InputType::Stdin(_),
+                output_type: OutputType::Stdout(_),
+                expression: None,
+                verbocity: VerbocityLevel::Silent,
+                just_print_help: false,
+            }) => {
+                println!("check1 succ!");
+            }
+            _ => {
+                assert!(false, "argument parsing failed");
+            }
+        }
+
+        let foo_in = TempFile::new("temp_foo_in");
+        let foo_out = TempFile::new("temp_foo_out");
+
+        // check2
+        match parse_arguments(&mut vec![foo_in.path.to_owned(), foo_out.path.to_owned()].into_iter()) {
+            Ok(ArgumentOptions {
+                convertion_type: ConvertionType::Obj,
+                input_type: InputType::File(mut fi),
+                output_type: OutputType::File(mut fo),
+                expression: None,
+                verbocity: VerbocityLevel::Silent,
+                just_print_help: false,
+            }) => {
+                let mut buf = Vec::new();
+                fi.read_to_end(&mut buf).expect("failed to read from test input file");
+                assert_eq!(foo_in.path.as_bytes(), buf);
+                fo.write_all(&buf).expect("failed to write to test output file");
+                // TODO: test output file's contents
+
+                println!("check2 succ!");
+            }
+            _ => {
+                assert!(false, "argument parsing failed");
+            }
+        }
+
+        // check3
+        match parse_arguments(&mut vec![foo_out.path.to_owned()].into_iter()) {
+            Ok(ArgumentOptions {
+                convertion_type: ConvertionType::Obj,
+                input_type: InputType::Stdin(_),
+                output_type: OutputType::File(_),
+                expression: None,
+                verbocity: VerbocityLevel::Silent,
+                just_print_help: false,
+            }) => {
+                println!("check3 succ!");
+            }
+            _ => {
+                assert!(false, "argument parsing failed");
+            }
+        }
+
+        // check4
+        match parse_arguments(&mut vec!["-t".to_owned(), "bgeo".to_owned(), foo_out.path.to_owned()].into_iter()) {
+            Ok(ArgumentOptions {
+                convertion_type: ConvertionType::Bgeo,
+                input_type: InputType::Stdin(_),
+                output_type: OutputType::File(_),
+                expression: None,
+                verbocity: VerbocityLevel::Silent,
+                just_print_help: false,
+            }) => {
+                println!("check4 succ!");
+            }
+            _ => {
+                assert!(false, "argument parsing failed");
+            }
+        }
+
+        // check5
+        match parse_arguments(&mut vec![foo_out.path.to_owned(), "-t".to_owned(), "geo".to_owned()].into_iter()) {
+            Ok(ArgumentOptions {
+                convertion_type: ConvertionType::Geo,
+                input_type: InputType::Stdin(_),
+                output_type: OutputType::File(_),
+                expression: None,
+                verbocity: VerbocityLevel::Silent,
+                just_print_help: false,
+            }) => {
+                println!("check5 succ!");
+            }
+            _ => {
+                assert!(false, "argument parsing failed");
+            }
+        }
+
+        // check6
+        match parse_arguments(
+            &mut vec![
+                foo_in.path.to_owned(),
+                "-t".to_owned(),
+                "geo".to_owned(),
+                foo_out.path.to_owned(),
+            ]
+            .into_iter(),
+        ) {
+            Ok(ArgumentOptions {
+                convertion_type: ConvertionType::Geo,
+                input_type: InputType::File(_),
+                output_type: OutputType::File(_),
+                expression: None,
+                verbocity: VerbocityLevel::Silent,
+                just_print_help: false,
+            }) => {
+                println!("check6 succ!");
+            }
+            _ => {
+                assert!(false, "argument parsing failed");
+            }
+        }
+    }
 }

@@ -11,8 +11,7 @@ enum ReaderElementOption {
     Some(ReaderElement),
     ArrayEndToken,
     MapEndToken,
-    ValueSeparatorToken,
-    None
+    ValueSeparatorToken
 }
 
 struct BgeoParser<'a> {
@@ -105,17 +104,19 @@ impl<'a> BgeoParser<'a> {
         (self.u16_from_bytes)(buff)
     }
 
-    fn parse_u32(&mut self) -> u32 {
-        let mut buff = [0_u8; 4];
-        self.chan.read_exact(&mut buff).expect("unexpected end of buffer while reading u32");
-        (self.u32_from_bytes)(buff)
-    }
+    // currently not needed
+    // 
+    // fn parse_u32(&mut self) -> u32 {
+    //     let mut buff = [0_u8; 4];
+    //     self.chan.read_exact(&mut buff).expect("unexpected end of buffer while reading u32");
+    //     (self.u32_from_bytes)(buff)
+    // }
 
-    fn parse_u64(&mut self) -> u64 {
-        let mut buff = [0_u8; 8];
-        self.chan.read_exact(&mut buff).expect("unexpected end of buffer while reading u64");
-        (self.u64_from_bytes)(buff)
-    }
+    // fn parse_u64(&mut self) -> u64 {
+    //     let mut buff = [0_u8; 8];
+    //     self.chan.read_exact(&mut buff).expect("unexpected end of buffer while reading u64");
+    //     (self.u64_from_bytes)(buff)
+    // }
 
     fn parse_i8(&mut self) -> i8 {
         let mut buff = [0_u8; 1];
@@ -367,6 +368,9 @@ impl<'a> BgeoParser<'a> {
 
 
 pub fn parse_binary_first_byte_separately(first_byte: u8, input: &mut dyn std::io::Read) -> ReaderElement {
+    if first_byte != JID_MAGIC {
+        panic!("bad magic header!");
+    }
     let mut buf = [0_u8; 4];
     input.read_exact(&mut buf[..4]).expect("failed to endian magic");
 
@@ -385,10 +389,6 @@ pub fn parse_binary_first_byte_separately(first_byte: u8, input: &mut dyn std::i
 pub fn parse_binary(input: &mut dyn std::io::Read) -> ReaderElement {
     let mut buf = [0_u8; 1];
     input.read_exact(&mut buf[..1]).expect("failed to read magic");
-
-    if buf[0] != JID_MAGIC {
-        panic!("bad magic header!");
-    }
 
     return parse_binary_first_byte_separately(buf[0], input);
 }
