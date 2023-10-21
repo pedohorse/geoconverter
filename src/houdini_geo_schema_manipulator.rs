@@ -1,5 +1,5 @@
 use crate::expressions::{
-    self, evaluate_expression_precompiled_with_bindings, BindingValue, CompilationError, EvaluationError, ExpressionError,
+    self, evaluate_expression_precompiled_with_bindings, BindingValue, ExpressionError,
     PrecompiledCode,
 };
 use crate::geo_struct::ReaderElement;

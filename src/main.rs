@@ -4,6 +4,7 @@ use geoconverter::{create_stl_solid, parse, serialize_obj, serialize_stl, Houdin
 use std::env::args;
 use std::fs::File;
 use std::io::{self, Write};
+use std::time::Instant;
 
 enum ConvertionType {
     Obj,
@@ -22,17 +23,30 @@ enum OutputType {
     File(io::BufWriter<File>),
 }
 
+pub enum VerbocityLevel {
+    Silent,
+    Verbose
+}
+
 struct ArgumentOptions {
     convertion_type: ConvertionType,
     input_type: InputType,
     output_type: OutputType,
-    expression: Option<String>
+    expression: Option<String>,
+    verbocity: VerbocityLevel,
+    just_print_help: bool,
 }
 
 const HELP_MESSAGE: &str = "
-usage: geoconverter [-t type] [input_file] [output_file]
+usage: geoconverter [-h] [-v] [e expression] [-t type] [input_file] [output_file]
     
-    -t type (default=obj)
+    -t type (default=obj)   Type of output file, available types are obj,stl,geo,bgeo
+    -e expression           Expression to run over a point attribute. 
+                            It should have a form of '@attr = expression', where 'attr' is some
+                            existing point attribute on geometry, 
+                            expression may have bindings to other attributes using '@otherattr' syntax
+    -v                      Print some verbose info to stderr
+    -h                      Print this help message and exit, other args are ignored
 
 If last 2 arguments are file paths - 
   first is interpreted as input file path,
@@ -56,6 +70,22 @@ fn main() {
             std::process::exit(2);
         }
     };
+
+    if options.just_print_help {
+        print!("{}", HELP_MESSAGE);
+        std::process::exit(0);
+    }
+
+    let mut benchmark;
+    
+
+    macro_rules! log{
+        ($template:literal $(, $($arg:expr),*)?) => {
+            if let VerbocityLevel::Verbose = options.verbocity {
+                eprintln!($template, benchmark.elapsed().as_secs_f32(), $($arg),*);
+            }
+        }
+    }
 
     // if expression provided - try compiling it
     let expr = if let Some(expr) = &options.expression {
@@ -81,17 +111,22 @@ fn main() {
         None
     };
 
+    benchmark = Instant::now();
+
     // input parsing
     let res = parse(match options.input_type {
         InputType::File(ref mut x) => x,
         InputType::Stdin(ref mut x) => x,
     });
+    log!("input read took {}s");
 
     // processing
     let res = if let Some((target_attr_name, precomp_expr)) = expr {
         let mut manip = HoudiniGeoSchemaManipulator::new(&res);
-
+        
+        benchmark = Instant::now();
         manip.run_over_point_attributes_precompiled(&precomp_expr, target_attr_name);
+        log!("processing took {}s");
 
         manip.into_result()
     } else {
@@ -103,6 +138,8 @@ fn main() {
         OutputType::Stdout(ref mut f) => f,
         OutputType::File(ref mut f) => f,
     };
+
+    benchmark = Instant::now();
 
     // convertion
     match options.convertion_type {
@@ -117,6 +154,7 @@ fn main() {
         OutputType::File(ref mut file) => file.flush().expect("failed to flush the file"),
         OutputType::Stdout(ref mut file) => file.flush().expect("failed to flush stdout"),
     }
+    log!("convertion and write took {}s");
 }
 
 enum ExpectedFlag {
@@ -136,9 +174,18 @@ fn parse_arguments(argv: &mut dyn Iterator<Item = String>) -> Result<ArgumentOpt
     let mut expression: Option<String> = None;
     let mut flags = ExpectedFlag::NotExpecting;
     let mut stashed_path: Option<String> = None;
+    let mut verbocity = VerbocityLevel::Silent;
+    let mut just_print_help = false;
 
     for arg in argv {
         match (arg.as_str(), &flags) {
+            ("-h", ExpectedFlag::NotExpecting) => {
+                just_print_help = true;
+                break; // we don't care about other args now
+            }
+            ("-v", ExpectedFlag::NotExpecting) => {
+                verbocity = VerbocityLevel::Verbose;
+            }
             ("-t", ExpectedFlag::NotExpecting) => {
                 flags = ExpectedFlag::ExpectingType;
             }
@@ -195,10 +242,12 @@ fn parse_arguments(argv: &mut dyn Iterator<Item = String>) -> Result<ArgumentOpt
     };
 
     Ok(ArgumentOptions {
-        convertion_type: convertion_type,
+        convertion_type,
         input_type: input_type.expect("impossible!"),
         output_type: output_type.expect("impossible!"),
-        expression: expression
+        expression,
+        verbocity,
+        just_print_help
     })
 }
 
@@ -252,7 +301,9 @@ mod tests {
                 convertion_type: ConvertionType::Obj,
                 input_type: InputType::Stdin(_),
                 output_type: OutputType::Stdout(_),
-                expression: None
+                expression: None,
+                verbocity: VerbocityLevel::Silent,
+                just_print_help: false,
             }) => {
                 println!("check1 succ!");
             }
@@ -270,7 +321,9 @@ mod tests {
                 convertion_type: ConvertionType::Obj,
                 input_type: InputType::File(mut fi),
                 output_type: OutputType::File(mut fo),
-                expression: None
+                expression: None,
+                verbocity: VerbocityLevel::Silent,
+                just_print_help: false,
             }) => {
                 let mut buf = Vec::new();
                 fi.read_to_end(&mut buf).expect("failed to read from test input file");
@@ -291,7 +344,9 @@ mod tests {
                 convertion_type: ConvertionType::Obj,
                 input_type: InputType::Stdin(_),
                 output_type: OutputType::File(_),
-                expression: None
+                expression: None,
+                verbocity: VerbocityLevel::Silent,
+                just_print_help: false,
             }) => {
                 println!("check3 succ!");
             }
@@ -306,7 +361,9 @@ mod tests {
                 convertion_type: ConvertionType::Bgeo,
                 input_type: InputType::Stdin(_),
                 output_type: OutputType::File(_),
-                expression: None
+                expression: None,
+                verbocity: VerbocityLevel::Silent,
+                just_print_help: false,
             }) => {
                 println!("check4 succ!");
             }
@@ -321,7 +378,9 @@ mod tests {
                 convertion_type: ConvertionType::Geo,
                 input_type: InputType::Stdin(_),
                 output_type: OutputType::File(_),
-                expression: None
+                expression: None,
+                verbocity: VerbocityLevel::Silent,
+                just_print_help: false,
             }) => {
                 println!("check5 succ!");
             }
@@ -344,7 +403,9 @@ mod tests {
                 convertion_type: ConvertionType::Geo,
                 input_type: InputType::File(_),
                 output_type: OutputType::File(_),
-                expression: None
+                expression: None,
+                verbocity: VerbocityLevel::Silent,
+                just_print_help: false,
             }) => {
                 println!("check6 succ!");
             }
